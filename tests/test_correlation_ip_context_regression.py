@@ -80,3 +80,19 @@ def test_long_mixed_table_retains_its_header_and_every_network_address(outer_pip
     )
     assert addresses <= found
     assert VERSION not in found
+
+
+@pytest.mark.parametrize("version_label", ["Source version", "Source build", "Destination version"])
+@pytest.mark.parametrize("network_label", ["Source", "Destination", "Source IP", "C2 IP"])
+@pytest.mark.parametrize("network_first", [False, True])
+def test_direction_words_in_version_headers_do_not_override_column_type(
+    version_label, network_label, network_first
+):
+    columns = [(version_label, VERSION), (network_label, ADDRESS)]
+    if network_first:
+        columns.reverse()
+    text = " | ".join(label for label, _ in columns) + "\n"
+    text += " | ".join(value for _, value in columns)
+    found = ThreatEntityExtractor.extract_network_iocs(text)
+    assert ADDRESS in found
+    assert VERSION not in found

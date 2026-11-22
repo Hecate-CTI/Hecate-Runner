@@ -302,9 +302,11 @@ _VERSION_CONTEXT_PREFIX_RE = re.compile(
 )
 _VERSION_COLUMN_RE = re.compile(r"\b(?:versions?|baseline|fixed|patch|build|release)\b", re.I)
 _NETWORK_COLUMN_RE = re.compile(
-    r"\b(?:ipv?[46]?|addresses?|c2|iocs?|indicators?|hosts?|endpoints?|destination|source|domains?)\b",
+    r"\b(?:ipv?[46]?|addresses?|c2|iocs?|indicators?|hosts?|endpoints?|domains?)\b",
     re.I,
 )
+
+_NETWORK_DIRECTION_COLUMN_RE = re.compile(r"\b(?:source|destination)\b", re.I)
 
 
 def _table_ip_contexts(text: str) -> dict[int, bool]:
@@ -324,7 +326,10 @@ def _table_ip_contexts(text: str) -> dict[int, bool]:
         # Labels establish a header; numeric data and Markdown separators keep
         # the preceding header until the table ends or a new header appears.
         if not matches and any(
-            _VERSION_COLUMN_RE.search(cell) or _NETWORK_COLUMN_RE.search(cell) for cell in cells
+            _VERSION_COLUMN_RE.search(cell)
+            or _NETWORK_COLUMN_RE.search(cell)
+            or _NETWORK_DIRECTION_COLUMN_RE.search(cell)
+            for cell in cells
         ):
             version_columns = {
                 column
@@ -332,7 +337,9 @@ def _table_ip_contexts(text: str) -> dict[int, bool]:
                 if _VERSION_COLUMN_RE.search(cell) and not _NETWORK_COLUMN_RE.search(cell)
             }
             network_columns = {
-                column for column, cell in enumerate(cells) if _NETWORK_COLUMN_RE.search(cell)
+                column
+                for column, cell in enumerate(cells)
+                if _NETWORK_COLUMN_RE.search(cell) or _NETWORK_DIRECTION_COLUMN_RE.search(cell)
             }
         if version_columns or network_columns:
             separators = [index for index, character in enumerate(line) if character == "|"]
