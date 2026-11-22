@@ -17,7 +17,7 @@ from typing import Any
 
 from hecate_runner.bas.base import DetonationResult, SafetyViolationError
 from hecate_runner.bas.docker_access import run_docker
-from hecate_runner.bas.paths import SENSOR_TRACE_PATH
+from hecate_runner.bas.paths import SENSOR_TRACE_PATH, permitted_tmp_path
 
 TRACE_PATH = SENSOR_TRACE_PATH
 APPROVED_AGENT_IMAGES = {
@@ -169,9 +169,7 @@ def parse_file_trace(
                 flags = m_open["flags"]
             except (ValueError, SyntaxError):
                 continue
-            if not start <= timestamp <= end or not path.startswith("/tmp/"):
-                continue
-            if path == TRACE_PATH:
+            if not start <= timestamp <= end or not permitted_tmp_path(path):
                 continue
             if expected_files and path not in expected_files:
                 continue
@@ -216,7 +214,7 @@ def parse_file_trace(
                 path = ast.literal_eval(m_creat["path"])
             except (ValueError, SyntaxError):
                 continue
-            if not start <= timestamp <= end or not path.startswith("/tmp/") or path == TRACE_PATH:
+            if not start <= timestamp <= end or not permitted_tmp_path(path):
                 continue
             if expected_files and path not in expected_files:
                 continue
@@ -251,7 +249,7 @@ def parse_file_trace(
                 path = ast.literal_eval(m_unlink["path"])
             except (ValueError, SyntaxError):
                 continue
-            if not start <= timestamp <= end or not path.startswith("/tmp/") or path == TRACE_PATH:
+            if not start <= timestamp <= end or not permitted_tmp_path(path):
                 continue
             if expected_files and path not in expected_files:
                 continue
@@ -281,11 +279,7 @@ def parse_file_trace(
                 newpath = ast.literal_eval(m_rename["newpath"])
             except (ValueError, SyntaxError):
                 continue
-            if (
-                not start <= timestamp <= end
-                or not newpath.startswith("/tmp/")
-                or newpath == TRACE_PATH
-            ):
+            if not start <= timestamp <= end or not permitted_tmp_path(newpath):
                 continue
             pid = int(m_rename["pid"])
             ev = {
