@@ -72,3 +72,42 @@ def test_normalization_must_not_turn_entities_into_empty_wildcards(value):
     normalize = username if "@" in value or value.startswith("DOMAIN") else basename
     with pytest.raises(ValueError):
         normalize(value)
+
+
+def test_poisoned_parent_does_not_block_valid_pivots():
+    """One bad parent/user must not erase child/egress pivots from clean fields."""
+    pivots = synthesize_pivot_queries(
+        "splunk",
+        {
+            "hosts": ["srv-app-01"],
+            "processes": ["cmd.exe"],
+            "parent_processes": ['bad" | collect', "explorer.exe"],
+            "users": ["alice"],
+            "ips": ["203.0.113.10"],
+        },
+    )
+    types = {p["type"] for p in pivots}
+    assert "child_process" in types
+    assert "network_egress" in types
+    net = next(p for p in pivots if p["type"] == "network_egress")
+    assert 'host="srv-app-01"' in net["query"]
+    assert 'dest_ip="203.0.113.10"' in net["query"]
+
+
+@pytest.mark.parametrize("dialect", ["splunk", "sentinel", "elastic", "crowdstrike", "chronicle"])
+def test_ip_egress_keeps_known_host_scope(dialect):
+    from hecate_runner.execution.pivot_engine import _build_network_egress_query
+
+    query = _build_network_egress_query(dialect, "host-a.corp", "curl.exe", "198.51.100.9")
+    assert "198.51.100.9" in query
+    # Dialect-specific host anchors must survive the IP branch.
+    if dialect == "splunk":
+        assert 'host="host-a.corp"' in query
+    elif dialect == "sentinel":
+        assert 'DeviceName =~ "host-a.corp"' in query
+    elif dialect == "elastic":
+        assert 'host.name: "host-a.corp"' in query
+    elif dialect == "chronicle":
+        assert 'principal.hostname = "host-a.corp"' in query
+    else:
+        assert "ComputerName=" in query and "host-a.corp" in query
