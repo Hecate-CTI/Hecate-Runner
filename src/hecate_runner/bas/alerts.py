@@ -87,7 +87,7 @@ def find_fired_alert(
                     pass
             if row.get("hecate_bas_run_id") != run_id or row.get("hecate_hunt_id") != hunt_id:
                 continue
-            timestamp = row.get("timestamp_utc") or row.get("_time")
+            timestamp = row.get("timestamp_utc") or row.get("UtcTime") or row.get("_time")
             if timestamp is None:
                 continue
             try:

@@ -138,15 +138,32 @@ class DetectionVerifier:
             raise ValueError("Missing or invalid BAS timestamp")
         if isinstance(value, datetime):
             parsed = value
+        elif isinstance(value, (int, float)):
+            raw = float(value)
+            if raw > 1e11:
+                raw /= 1000.0
+            parsed = datetime.fromtimestamp(raw, UTC)
         elif epoch:
             try:
-                parsed = datetime.fromtimestamp(float(value), UTC)
+                raw = float(value)
+                if raw > 1e11:
+                    raw /= 1000.0
+                parsed = datetime.fromtimestamp(raw, UTC)
             except (ValueError, TypeError, OverflowError, OSError):
                 if not isinstance(value, str):
                     raise ValueError("Invalid BAS event timestamp") from None
                 parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         elif isinstance(value, str):
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                try:
+                    raw = float(value)
+                    if raw > 1e11:
+                        raw /= 1000.0
+                    parsed = datetime.fromtimestamp(raw, UTC)
+                except (ValueError, TypeError, OverflowError, OSError):
+                    raise ValueError("Invalid BAS timestamp") from None
         else:
             raise ValueError("Invalid BAS timestamp")
         if parsed.tzinfo is None or parsed.utcoffset() is None:
@@ -156,11 +173,11 @@ class DetectionVerifier:
     @classmethod
     def _event_in_window(cls, event: dict[str, Any], start: datetime, end: datetime) -> bool:
         for field_name in ("timestamp_utc", "UtcTime", "_time"):
-            if field_name in event:
+            if field_name in event and event[field_name] is not None:
                 try:
                     stamp = cls._timestamp(event[field_name], epoch=field_name == "_time")
                 except (ValueError, TypeError, OverflowError, OSError):
-                    return False
+                    continue
                 return start <= stamp <= end
         return False
 

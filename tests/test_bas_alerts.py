@@ -100,3 +100,12 @@ def test_alert_api_permission_error_is_not_a_detection_miss(alert_case):
     client._request.side_effect = PermissionError("403 fired alerts not readable")
     with pytest.raises(PermissionError):
         find_fired_alert(client, **args)
+
+
+def test_alert_proof_extracted_from_utctime_field(alert_case):
+    client, _record, _event, args = alert_case
+    del _event["timestamp_utc"]
+    _event["UtcTime"] = args["started"].isoformat()
+    proof = find_fired_alert(client, **args)
+    assert proof is not None
+    assert proof.sid == "scheduler-real"
