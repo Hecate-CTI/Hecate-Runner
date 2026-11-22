@@ -44,10 +44,18 @@ def parse_time_window(
     so Sentinel KQL ``datetime("...")`` accepts them without extra normalization.
     """
     try:
-        clean = timestamp_str.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(clean)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
+        raw = str(timestamp_str or "").strip()
+        # OCSF/normalizer often emit epoch seconds or millis as bare numbers.
+        if raw and raw.replace(".", "", 1).isdigit():
+            epoch = float(raw)
+            if epoch > 1e12:  # millis
+                epoch /= 1000.0
+            dt = datetime.fromtimestamp(epoch, tz=UTC)
+        else:
+            clean = raw.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(clean)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
     except Exception:
         dt = datetime.now(UTC)
 

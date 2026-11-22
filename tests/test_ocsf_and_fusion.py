@@ -761,3 +761,13 @@ def test_fusion_recovers_via_process_lookup_when_network_empty() -> None:
     assert fused.fused_lineage is True
     assert "wget" in fused.process_name
     assert "wget http://c2" in fused.command_line
+
+
+def test_parse_time_window_accepts_epoch_seconds_and_millis():
+    from hecate_runner.execution.fusion import parse_time_window
+
+    earliest, _latest, _, _ = parse_time_window("1700000000", window_sec=60)
+    assert earliest.startswith("2023-11-14")
+    earliest_ms, _latest_ms, _, _ = parse_time_window("1700000000000", window_sec=60)
+    assert earliest_ms.startswith("2023-11-14")
+    assert earliest == earliest_ms
