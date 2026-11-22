@@ -158,7 +158,11 @@ leases require a successful audit before subsequent execution.
 
 File validation uses successful, time-scoped syscall observations. Expected
 filenames, post-run hashes, and historical `lab_file_delta` records cannot serve
-as creation/deletion evidence.
+as creation/deletion evidence. Live evidence must have an explicit, timezone-aware
+timestamp within the verification window (including its clock/ingestion
+allowances). Missing, invalid and out-of-window timestamps are excluded; invalid
+or reversed execution windows fail verification. Synthetic logic probes remain
+separate and cannot earn live validation credit.
 
 ## Simulation results and manual hunt verification
 

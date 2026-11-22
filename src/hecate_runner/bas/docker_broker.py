@@ -17,10 +17,11 @@ import stat
 import struct
 import subprocess
 from collections.abc import Callable
-from pathlib import PurePosixPath
 from typing import cast
 
-TRACE = "/tmp/hecate-exec.trace"
+from hecate_runner.bas.paths import SENSOR_TRACE_PATH, permitted_tmp_path
+
+TRACE = SENSOR_TRACE_PATH
 FIND = ["find", "/tmp", "-maxdepth", "2", "!", "-name", "hecate-exec.trace", "!", "-path", "/tmp"]
 MAX_OUTPUT = 8 * 1024 * 1024
 
@@ -49,16 +50,7 @@ class Policy:
 
     @staticmethod
     def tmp_path(value: str) -> bool:
-        path = PurePosixPath(value)
-        return (
-            path.is_absolute()
-            and len(path.parts) > 2
-            and path.parts[1] == "tmp"
-            and ".." not in path.parts
-            and value == str(path)
-            and value != TRACE
-            and "\x00" not in value
-        )
+        return permitted_tmp_path(value)
 
     def dispatch(
         self,
