@@ -371,3 +371,71 @@ def test_slack_simulation_sweep_actions(
     res = sim.simulate_action("hecate_approve_sweep", staged.sweep_id, user="secops_lead")
     assert res["ok"]
     assert "Clean Sweep" in res["message"] or "Hunt Sweep Executed" in res["message"]
+
+
+def test_scheduler_slack_notification_filtering(
+    mock_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_model(*args, **kwargs):
+        raise RuntimeError("No model")
+
+    monkeypatch.setattr("hecate_agent.core.llm_router.create_router", no_model)
+
+    notifications_executed: list[object] = []
+
+    # 1. Clean run with default slack_notify_clean_sweeps=False and auto_hunt_approval_required=False
+    settings_clean = Settings(
+        hecate_workspace=mock_workspace,
+        query_provider="mock",
+        auto_hunt_approval_required=False,
+        slack_notify_clean_sweeps=False,
+    )
+    mock_provider_clean = MockQueryProvider(responses=[0, 0])
+    scheduler_clean = HuntExecutionScheduler(
+        settings=settings_clean,
+        provider=mock_provider_clean,
+        notify_fn=lambda blocks: notifications_executed.append(blocks),
+    )
+
+    staged_clean = scheduler_clean.stage_sweeps(hunt_id="H-0021", force=True)[0]
+    # Staged notification should be skipped because auto_hunt_approval_required=False
+    assert len(notifications_executed) == 0
+
+    res_clean = scheduler_clean.execute_sweep(staged_clean.sweep_id)
+    assert res_clean.ok
+    assert res_clean.matched_count == 0
+    # Clean execution notification should be skipped because slack_notify_clean_sweeps=False
+    assert len(notifications_executed) == 0
+
+    # 2. Execution with matches (> 0 hits) SHOULD notify even if clean_sweeps is False
+    notifications_executed.clear()
+    mock_provider_hits = MockQueryProvider(responses=[5, 5])
+    scheduler_hits = HuntExecutionScheduler(
+        settings=settings_clean,
+        provider=mock_provider_hits,
+        notify_fn=lambda blocks: notifications_executed.append(blocks),
+    )
+    staged_hits = scheduler_hits.stage_sweeps(hunt_id="H-0021", force=True)[0]
+    res_hits = scheduler_hits.execute_sweep(staged_hits.sweep_id)
+    assert res_hits.ok
+    assert res_hits.matched_count == 5
+    assert len(notifications_executed) == 1
+
+    # 3. Clean run with slack_notify_clean_sweeps=True SHOULD notify
+    notifications_executed.clear()
+    settings_allow_clean = Settings(
+        hecate_workspace=mock_workspace,
+        query_provider="mock",
+        auto_hunt_approval_required=False,
+        slack_notify_clean_sweeps=True,
+    )
+    scheduler_allow_clean = HuntExecutionScheduler(
+        settings=settings_allow_clean,
+        provider=mock_provider_clean,
+        notify_fn=lambda blocks: notifications_executed.append(blocks),
+    )
+    staged_allow = scheduler_allow_clean.stage_sweeps(hunt_id="H-0021", force=True)[0]
+    res_allow = scheduler_allow_clean.execute_sweep(staged_allow.sweep_id)
+    assert res_allow.ok
+    assert res_allow.matched_count == 0
+    assert len(notifications_executed) == 1

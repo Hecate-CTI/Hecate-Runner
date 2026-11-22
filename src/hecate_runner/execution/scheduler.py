@@ -256,13 +256,18 @@ class HuntExecutionScheduler:
 
             # Notify via Slack if callback configured
             if self.notify_fn:
-                try:
-                    from hecate_runner.slack_blocks import build_staged_sweep_card
+                should_notify_staged = (
+                    self.settings.auto_hunt_approval_required
+                    and self.settings.slack_notify_staged_sweeps
+                )
+                if should_notify_staged:
+                    try:
+                        from hecate_runner.slack_blocks import build_staged_sweep_card
 
-                    blocks = build_staged_sweep_card(sweep, title=h.get("title", ""))
-                    self.notify_fn(blocks)
-                except Exception as exc:
-                    log.warning("Could not dispatch staged sweep Slack card (%s)", exc)
+                        blocks = build_staged_sweep_card(sweep, title=h.get("title", ""))
+                        self.notify_fn(blocks)
+                    except Exception as exc:
+                        log.warning("Could not dispatch staged sweep Slack card (%s)", exc)
 
         return staged
 
@@ -446,13 +451,20 @@ class HuntExecutionScheduler:
 
         # Notify via Slack if callback configured
         if self.notify_fn:
-            try:
-                from hecate_runner.slack_blocks import build_sweep_result_card
+            if result.matched_count > 0 or self.settings.slack_notify_clean_sweeps:
+                try:
+                    from hecate_runner.slack_blocks import build_sweep_result_card
 
-                blocks = build_sweep_result_card(result)
-                self.notify_fn(blocks)
-            except Exception as exc:
-                log.warning("Could not dispatch sweep result Slack card (%s)", exc)
+                    blocks = build_sweep_result_card(result)
+                    self.notify_fn(blocks)
+                except Exception as exc:
+                    log.warning("Could not dispatch sweep result Slack card (%s)", exc)
+            else:
+                log.info(
+                    "Skipping Slack sweep notification for clean run (%s matches) on %s",
+                    result.matched_count,
+                    staged.hunt_id,
+                )
 
         return result
 

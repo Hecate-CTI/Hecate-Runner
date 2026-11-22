@@ -425,6 +425,7 @@ def test_notify_threat_intake_deduplication(
         update={
             "slack_bot_token": "xoxb-fake",
             "hecate_workspace": tmp_path,
+            "slack_notify_intake": True,
         }
     )
     dispatched = []
@@ -461,6 +462,7 @@ def test_notify_threat_intake_fallback_text_is_concise(
         update={
             "slack_bot_token": "xoxb-fake",
             "hecate_workspace": tmp_path,
+            "slack_notify_intake": True,
         }
     )
     captured = []
@@ -490,3 +492,121 @@ def test_notify_threat_intake_fallback_text_is_concise(
     attachments = captured[0][2]
     assert attachments is not None
     assert len(attachments) == 1
+
+
+def test_notify_threat_intake_disabled_by_default(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Default settings has slack_notify_intake=False
+    settings = settings.model_copy(
+        update={
+            "slack_bot_token": "xoxb-fake",
+            "hecate_workspace": tmp_path,
+        }
+    )
+    assert settings.slack_notify_intake is False
+    dispatched = []
+
+    def fake_post(
+        self: SlackNotificationRouter, channel: str, text: str, **kw: object
+    ) -> tuple[bool, str]:
+        dispatched.append((channel, text))
+        return True, "ok"
+
+    monkeypatch.setattr(SlackNotificationRouter, "post_message", fake_post)
+
+    item = CTIItem(
+        source="abuse_ch",
+        title="ThreatFox Indicator: IClickFix",
+        identifier="1988783",
+        content="Malware: IClickFix kojur.ir",
+    )
+    notify_threat_intake(settings, item)
+    assert len(dispatched) == 0
+
+
+def test_notify_draft_created_suppresses_incremental_enrichment_by_default(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = settings.model_copy(
+        update={
+            "slack_webhook_url": "https://hooks.slack.com/services/test",
+        }
+    )
+    assert settings.slack_notify_enrichment is False
+    dispatched = []
+
+    def fake_post(
+        self: SlackNotificationRouter, channel: str, text: str, **kw: object
+    ) -> tuple[bool, str]:
+        dispatched.append((channel, text))
+        return True, "ok"
+
+    monkeypatch.setattr(SlackNotificationRouter, "post_message", fake_post)
+
+    result = RunResult(
+        outcome="incremental_enrichment",
+        hunt_id="H-0021",
+        draft_path=Path("/tmp/H-0021.md"),
+        detail="Appended 1 new indicator",
+    )
+    notify_draft_created(settings, result)
+    assert len(dispatched) == 0
+
+
+def test_notify_draft_created_allows_incremental_enrichment_when_enabled(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = settings.model_copy(
+        update={
+            "slack_webhook_url": "https://hooks.slack.com/services/test",
+            "slack_notify_enrichment": True,
+        }
+    )
+    dispatched = []
+
+    def fake_post(
+        self: SlackNotificationRouter, channel: str, text: str, **kw: object
+    ) -> tuple[bool, str]:
+        dispatched.append((channel, text))
+        return True, "ok"
+
+    monkeypatch.setattr(SlackNotificationRouter, "post_message", fake_post)
+
+    result = RunResult(
+        outcome="incremental_enrichment",
+        hunt_id="H-0021",
+        draft_path=Path("/tmp/H-0021.md"),
+        detail="Appended 1 new indicator",
+    )
+    notify_draft_created(settings, result)
+    assert len(dispatched) == 1
+    assert "Incremental Enrichment applied to *H-0021*" in dispatched[0][1]
+
+
+def test_notify_draft_created_still_delivers_new_drafts_by_default(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = settings.model_copy(
+        update={
+            "slack_webhook_url": "https://hooks.slack.com/services/test",
+        }
+    )
+    dispatched = []
+
+    def fake_post(
+        self: SlackNotificationRouter, channel: str, text: str, **kw: object
+    ) -> tuple[bool, str]:
+        dispatched.append((channel, text))
+        return True, "ok"
+
+    monkeypatch.setattr(SlackNotificationRouter, "post_message", fake_post)
+
+    result = RunResult(
+        outcome="draft_created",
+        hunt_id="H-0042",
+        draft_path=Path("/tmp/H-0042.md"),
+    )
+    notify_draft_created(settings, result)
+    assert len(dispatched) == 1
+    assert "New draft hunt *H-0042*" in dispatched[0][1]
