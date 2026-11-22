@@ -14,6 +14,7 @@ from hecate_runner.config import Settings
 from hecate_runner.notifications import notify_siem_drift
 from hecate_runner.siem_drift import (
     audit_workspace_queries,
+    invalidate_hunt_drift_watermark,
     load_drift_state,
     reconcile_all_drifted_queries,
     reconcile_hunt_queries,
@@ -118,6 +119,121 @@ def test_audit_skips_unchanged_hunts_via_mtime_watermark(mock_workspace: Path):
     assert forced["skipped_unchanged"] == 0
 
 
+def test_invalidate_hunt_drift_watermark_clears_cache(mock_workspace: Path):
+    first = audit_workspace_queries(mock_workspace, dry_run=True)
+    assert "H-0007" in first["hunt_watermarks"]
+    assert "H-0007" in first["hunts"]
+
+    assert invalidate_hunt_drift_watermark(mock_workspace, "H-0007") is True
+    saved = load_drift_state(mock_workspace)
+    assert saved is not None
+    assert "H-0007" not in (saved.get("hunt_watermarks") or {})
+    assert "H-0007" not in (saved.get("hunts") or {})
+
+    # Idempotent when already cleared / missing.
+    assert invalidate_hunt_drift_watermark(mock_workspace, "H-0007") is False
+    assert invalidate_hunt_drift_watermark(mock_workspace, "not-a-hunt") is False
+
+
+def test_invalidate_watermark_prevents_stale_in_sync_skip(mock_workspace: Path) -> None:
+    """After undeploy clears the watermark, audit re-checks remotes (not reused in_sync)."""
+    first = audit_workspace_queries(mock_workspace, dry_run=True)
+    assert first["hunt_watermarks"]["H-0007"]["clean"] is True
+
+    # Without invalidate, unchanged local mtime would skip and keep in_sync.
+    with mock.patch("hecate_runner.siem_drift.sync_queries_for_hunt") as mock_sync:
+        skipped = audit_workspace_queries(mock_workspace, dry_run=False)
+        mock_sync.assert_not_called()
+    assert skipped["skipped_unchanged"] == 1
+
+    assert invalidate_hunt_drift_watermark(mock_workspace, "H-0007") is True
+
+    with mock.patch(
+        "hecate_runner.siem_drift.sync_queries_for_hunt",
+        return_value=[
+            {
+                "file": "process__chmod.spl",
+                "target": "splunk_spl",
+                "status": "missing_remote",
+                "ok": False,
+                "remote_id": "Hecate_H-0007_chmod",
+                "detail": "Rule not found on remote SIEM",
+            }
+        ],
+    ) as mock_sync:
+        report = audit_workspace_queries(mock_workspace, target="splunk_spl", dry_run=False)
+        mock_sync.assert_called()
+    assert report["skipped_unchanged"] == 0
+    assert report["missing_count"] == 1
+
+
+def test_decommission_live_invalidates_watermark(
+    mock_workspace: Path, mock_live_undeploy, monkeypatch
+) -> None:
+    from hecate_runner.siem_drift import decommission_hunt_queries
+
+    audit_workspace_queries(mock_workspace, dry_run=True)
+    calls: list[str] = []
+
+    def _track(workspace, hunt_id):
+        calls.append(hunt_id)
+        return invalidate_hunt_drift_watermark(workspace, hunt_id)
+
+    monkeypatch.setattr("hecate_runner.siem_drift.invalidate_hunt_drift_watermark", _track)
+    monkeypatch.setattr(
+        "hecate_runner.siem_drift.audit_workspace_queries",
+        lambda *a, **k: {"total_hunts": 0},
+    )
+
+    decommission_hunt_queries(
+        mock_workspace,
+        hunt_id="H-0007",
+        dry_run=False,
+        target="splunk_spl",
+        reason="Remotes torn down",
+        actor="analyst",
+        retire_hunt=False,
+    )
+    assert "H-0007" in calls
+
+
+def test_undeploy_queries_for_hunt_live_invalidates_watermark(
+    mock_workspace: Path, monkeypatch
+) -> None:
+    from hecate_runner.slack_bot import undeploy_queries_for_hunt
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "hecate_agent.api.undeploy_transpiled_query",
+        lambda **kwargs: {
+            "status": "undeployed",
+            "ok": True,
+            "remote_id": "Hecate_H-0007_chmod",
+            "detail": "",
+        },
+    )
+
+    def _track(workspace, hunt_id):
+        calls.append(hunt_id)
+        return True
+
+    monkeypatch.setattr(
+        "hecate_runner.siem_drift.invalidate_hunt_drift_watermark",
+        _track,
+    )
+
+    results = undeploy_queries_for_hunt(
+        mock_workspace, "H-0007", dry_run=False, target="splunk_spl"
+    )
+    assert results and results[0]["ok"] is True
+    assert calls == ["H-0007"]
+
+    calls.clear()
+    undeploy_queries_for_hunt(mock_workspace, "H-0007", dry_run=True, target="splunk_spl")
+    assert calls == []
+
+
 def test_reconcile_hunt_queries_dry_run(mock_workspace: Path):
     results = reconcile_hunt_queries(mock_workspace, "H-0007", dry_run=True, force=True)
     assert len(results) == 2
@@ -193,6 +309,39 @@ def test_notify_siem_drift(mock_workspace: Path):
 
         ok, _detail = notify_siem_drift(settings, "H-0007", drifted)
         assert ok is True
+
+
+def test_cli_audit_siem_force_flag(mock_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--force must reach audit_workspace_queries so watermarks can be bypassed."""
+    from hecate_runner import cli
+    from typer.testing import CliRunner
+
+    seen: dict[str, object] = {}
+
+    def _fake_audit(workspace, target=None, dry_run=True, trigger="cli", force=False):
+        seen.update(workspace=workspace, target=target, dry_run=dry_run, force=force)
+        return {
+            "total_hunts": 0,
+            "total_queries": 0,
+            "in_sync_count": 0,
+            "decommissioned_count": 0,
+            "pending_decommission_count": 0,
+            "drifted_count": 0,
+            "missing_count": 0,
+            "error_count": 0,
+            "skipped_unchanged": 0,
+            "hunts": {},
+            "drifted_by_hunt": {},
+            "missing_by_hunt": {},
+            "audited_at": "2026-01-01T00:00:00Z",
+            "dry_run": dry_run,
+        }
+
+    monkeypatch.setattr("hecate_runner.siem_drift.audit_workspace_queries", _fake_audit)
+    monkeypatch.setattr("hecate_runner.siem_drift.build_siem_markdown_report", lambda report: "")
+    result = CliRunner().invoke(cli.app, ["audit-siem", "--dry-run", "--force", "--format", "json"])
+    assert result.exit_code == 0, result.output
+    assert seen.get("force") is True
 
 
 def test_cli_audit_siem_command(mock_workspace: Path):
@@ -834,3 +983,97 @@ def test_cli_decommission_and_lifecycle(mock_workspace: Path) -> None:
         assert "SIEM Detection Query Decommissioning" in res_decom.output
         assert summary_file.exists()
         assert "SIEM Detection Query Decommissioning" in summary_file.read_text(encoding="utf-8")
+
+
+def test_undeploy_without_retire_keeps_versions_active_and_surfaces_missing(
+    mock_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plain undeploy must not hide missing remotes behind decommissioned watermarks."""
+    from hecate_runner.siem_drift import (
+        audit_workspace_queries,
+        decommission_hunt_queries,
+        init_drift_db,
+        invalidate_hunt_drift_watermark,
+        save_drift_state,
+    )
+
+    # Seed a clean watermark so a buggy path would skip the live re-check.
+    save_drift_state(
+        mock_workspace,
+        {
+            "hunts": {
+                "H-0007": [
+                    {
+                        "file": "process__chmod.spl",
+                        "target": "splunk_spl",
+                        "status": "in_sync",
+                        "ok": True,
+                    }
+                ]
+            },
+            "hunt_watermarks": {"H-0007": {"mtime_ns": 1, "clean": True, "reused": False}},
+        },
+    )
+    conn = init_drift_db(mock_workspace)
+    with conn:
+        conn.execute(
+            """
+            INSERT INTO query_versions (
+                hunt_id, target, file_name, remote_id, version,
+                query_hash, query_content, deployed_at, deployed_by, status
+            ) VALUES ('H-0007', 'splunk_spl', 'process__chmod.spl', 'r1', 1, '', '', '', 'test', 'active')
+            """
+        )
+    conn.close()
+
+    monkeypatch.setattr(
+        "hecate_runner.siem_drift.undeploy_queries_for_hunt",
+        lambda **kwargs: [
+            {
+                "file": "process__chmod.spl",
+                "target": "splunk_spl",
+                "status": "undeployed",
+                "ok": True,
+                "remote_id": "r1",
+                "detail": "deleted",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "hecate_runner.siem_drift.sync_queries_for_hunt",
+        lambda *args, **kwargs: [
+            {
+                "file": "process__chmod.spl",
+                "target": "splunk_spl",
+                "status": "missing_remote",
+                "ok": False,
+                "remote_id": "r1",
+            }
+        ],
+    )
+    # Avoid needing a real hunt markdown for lifecycle during audit refresh.
+    monkeypatch.setattr(
+        "hecate_runner.siem_drift.get_hunt_lifecycle",
+        lambda workspace, hunt_id: {"status": "active", "is_retired": False, "path": None},
+    )
+
+    summary = decommission_hunt_queries(
+        mock_workspace,
+        "H-0007",
+        dry_run=False,
+        retire_hunt=False,
+        reason="temporary undeploy",
+        actor="test",
+    )
+    assert summary["total_decommissioned"] == 1
+
+    conn = init_drift_db(mock_workspace)
+    rows = conn.execute(
+        "SELECT status FROM query_versions WHERE hunt_id='H-0007' AND file_name='process__chmod.spl'"
+    ).fetchall()
+    conn.close()
+    assert rows and rows[0][0] == "active"
+
+    report = audit_workspace_queries(mock_workspace, dry_run=False, force=True)
+    assert report["missing_count"] >= 1
+    assert "H-0007" in report.get("missing_by_hunt", {})

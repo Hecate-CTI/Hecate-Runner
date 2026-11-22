@@ -22,6 +22,7 @@ from hecate_runner.sqlite_utils import connect_sqlite, connect_sqlite_ro
 from hecate_runner.workspace_paths import (
     is_valid_hunt_id,
     list_query_hunt_ids,
+    normalize_hunt_id,
     query_directory,
     read_artifact,
 )
@@ -554,28 +555,33 @@ def decommission_hunt_queries(
 
                 if not dry_run and ok:
                     with conn:
-                        # Mark existing query version as decommissioned
-                        cur = conn.execute(
-                            """
-                            UPDATE query_versions
-                            SET status = 'decommissioned'
-                            WHERE hunt_id = ? AND LOWER(target) = ? AND file_name = ?
-                            """,
-                            (h_id, tgt, f_name),
-                        )
-                        if cur.rowcount == 0:
-                            # Record baseline row if not tracked before
-                            conn.execute(
+                        # Only permanent retirement should mark query_versions
+                        # decommissioned. Plain undeploy (retire_hunt=False) must
+                        # leave versions active so audit-siem reports missing_remote
+                        # and auto-reconcile / Slack drift alerts can heal them.
+                        if retire_hunt:
+                            cur = conn.execute(
                                 """
-                                INSERT INTO query_versions (
-                                    hunt_id, target, file_name, remote_id, version,
-                                    query_hash, query_content, deployed_at, deployed_by, status
-                                ) VALUES (?, ?, ?, ?, 1, '', '', ?, ?, 'decommissioned')
+                                UPDATE query_versions
+                                SET status = 'decommissioned'
+                                WHERE hunt_id = ? AND LOWER(target) = ? AND file_name = ?
                                 """,
-                                (h_id, tgt, f_name, rem_id, now_iso, actor),
+                                (h_id, tgt, f_name),
                             )
+                            if cur.rowcount == 0:
+                                # Record baseline row if not tracked before
+                                conn.execute(
+                                    """
+                                    INSERT INTO query_versions (
+                                        hunt_id, target, file_name, remote_id, version,
+                                        query_hash, query_content, deployed_at, deployed_by, status
+                                    ) VALUES (?, ?, ?, ?, 1, '', '', ?, ?, 'decommissioned')
+                                    """,
+                                    (h_id, tgt, f_name, rem_id, now_iso, actor),
+                                )
 
-                        # Insert decommission event into drift_events
+                        # Insert decommission/undeploy event into drift_events
+                        event_status = "decommissioned" if retire_hunt else "undeployed"
                         conn.execute(
                             """
                             INSERT INTO drift_events (
@@ -591,13 +597,13 @@ def decommission_hunt_queries(
                                 tgt,
                                 f_name,
                                 rem_id,
-                                "decommissioned",
+                                event_status,
                                 "active",
-                                "decommissioned",
+                                event_status,
                                 None,
                                 None,
                                 None,
-                                f"Decommissioned: {reason}",
+                                f"{'Decommissioned' if retire_hunt else 'Undeployed'}: {reason}",
                                 actor,
                             ),
                         )
@@ -616,6 +622,16 @@ def decommission_hunt_queries(
         "decommissioned_at": now_iso,
         "results": all_results,
     }
+
+    # Live undeploy leaves local mtimes unchanged; clear watermarks so the refresh
+    # (and later audit-siem runs) re-check remotes instead of reporting stale in_sync.
+    if not dry_run:
+        for h_id in hunts:
+            if any(r.get("ok") and r.get("hunt_id") == h_id for r in all_results):
+                try:
+                    invalidate_hunt_drift_watermark(workspace, h_id)
+                except Exception as exc:
+                    log.warning("Could not invalidate drift watermark for %s: %s", h_id, exc)
 
     # Refresh audit state cache
     try:
@@ -647,6 +663,48 @@ def load_drift_state(workspace: Path) -> dict[str, Any] | None:
     except Exception as exc:
         log.warning("Failed to read drift state file at %s: %s", cache_path, exc)
         return None
+
+
+def invalidate_hunt_drift_watermark(workspace: Path, hunt_id: str) -> bool:
+    """Drop a hunt's cached clean audit results so the next audit re-checks remotes.
+
+    Live undeploy deletes remote saved searches without changing local query mtimes.
+    Without this, ``audit-siem`` can watermark-skip the hunt (``reused: true``) and
+    keep reporting ``in_sync``. Operators can still force a full re-sync with
+    ``audit-siem --force``.
+
+    Returns True when cached state was present and updated.
+    """
+    try:
+        normalized = normalize_hunt_id(hunt_id)
+    except ValueError:
+        return False
+
+    state = load_drift_state(workspace)
+    if not state:
+        return False
+
+    watermarks = dict(state.get("hunt_watermarks") or {})
+    hunts = dict(state.get("hunts") or {})
+    changed = False
+
+    for key in list(watermarks):
+        if str(key).upper() == normalized:
+            del watermarks[key]
+            changed = True
+    for key in list(hunts):
+        if str(key).upper() == normalized:
+            del hunts[key]
+            changed = True
+
+    if not changed:
+        return False
+
+    state["hunt_watermarks"] = watermarks
+    state["hunts"] = hunts
+    save_drift_state(workspace, state)
+    log.info("Invalidated drift watermark cache for %s after undeploy", normalized)
+    return True
 
 
 def get_drift_db_path(workspace: Path) -> Path:

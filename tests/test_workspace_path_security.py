@@ -1,5 +1,6 @@
 """Query and hunt artifacts cannot redirect I/O into private host paths."""
 
+import errno
 import os
 from unittest.mock import Mock
 
@@ -144,6 +145,41 @@ def test_size_limit_and_valid_hunt_lookup(tmp_path, monkeypatch):
         wp.read_artifact(hunt, tmp_path)
     with pytest.raises(ValueError, match="byte limit"):
         wp.write_artifact(hunt, "large", tmp_path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Descriptor-relative opens are POSIX-specific")
+def test_read_artifact_preserves_permission_denied(tmp_path, monkeypatch):
+    """EACCES/EPERM must not be rewritten as the generic symlink-safety ValueError."""
+    hunt = tmp_path / "hunts/2026/Q4/H-0001.md"
+    hunt.parent.mkdir(parents=True)
+    hunt.write_text("reviewed hunt")
+    original = os.open
+
+    def deny_artifact(path, flags, *args, **kwargs):
+        if path == "H-0001.md":
+            raise PermissionError(errno.EACCES, "Permission denied", path)
+        return original(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(wp.os, "open", deny_artifact)
+    with pytest.raises(PermissionError, match="Permission denied"):
+        wp.read_artifact(hunt, tmp_path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Descriptor-relative opens are POSIX-specific")
+def test_read_artifact_eperm_errno_becomes_permission_error(tmp_path, monkeypatch):
+    hunt = tmp_path / "hunts/2026/Q4/H-0001.md"
+    hunt.parent.mkdir(parents=True)
+    hunt.write_text("reviewed hunt")
+    original = os.open
+
+    def deny_with_errno(path, flags, *args, **kwargs):
+        if path == "H-0001.md":
+            raise OSError(errno.EPERM, "Operation not permitted", path)
+        return original(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(wp.os, "open", deny_with_errno)
+    with pytest.raises(PermissionError, match="Permission denied"):
+        wp.read_artifact(hunt, tmp_path)
 
 
 def test_continuous_replay_refuses_a_symlinked_suggestion_directory(tmp_path):
