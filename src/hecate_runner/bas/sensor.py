@@ -58,11 +58,13 @@ APPROVED_SENSOR_ENTRYPOINTS = {
     ),
 }
 _EXEC = re.compile(
-    r"^\s*(?P<pid>\d+)\s+(?P<time>\d+\.\d+)\s+execve\("
+    r"^\s*(?P<pid>\d+)\s+(?P<time>\d+\.\d+)\s+(?:execve|execveat)\((?:(?:AT_FDCWD|-?\d+),\s*)?"
     r'(?P<path>"(?:\\.|[^"\\])*")\s*,\s*'
     r"(?P<args>\[.*?\])\s*,"
 )
-_RESUMED = re.compile(r"^\s*(\d+)\s+(?P<time>\d+\.\d+)\s+<\.\.\. execve resumed>.*= 0$")
+_RESUMED = re.compile(
+    r"^\s*(\d+)\s+(?P<time>\d+\.\d+)\s+<\.\.\. (?:execve|execveat) resumed>.*= 0$"
+)
 
 _OPEN_SYSCALL = re.compile(
     r"^\s*(?P<pid>\d+)\s+(?P<time>\d+\.\d+)\s+(?:open|openat)\((?:AT_FDCWD,\s*)?"
@@ -91,6 +93,7 @@ _CONNECT_SYSCALL = re.compile(
 _RESUMED_FILE = re.compile(
     r"^\s*(?P<pid>\d+)\s+(?P<time>\d+\.\d+)\s+<\.\.\.\s+(?:open|openat|unlink|unlinkat|creat|rename|renameat|renameat2)\s+resumed>.*=\s*(?P<ret>-?\d+)"
 )
+_RESUMED_NET = re.compile(r"^\s*(?P<pid>\d+)\s+(?P<time>\d+\.\d+)\s+<\.\.\.\s+connect\s+resumed>.*")
 
 
 def parse_exec_trace(
@@ -327,6 +330,7 @@ def parse_net_trace(
 ) -> list[dict[str, Any]]:
     """Return outbound TCP connection attempts within the execution window."""
     events: list[dict[str, Any]] = []
+    pending: dict[str, dict[str, Any]] = {}
     for line in text.splitlines():
         match = _CONNECT_SYSCALL.match(line)
         if match:
@@ -339,21 +343,31 @@ def parse_net_trace(
                 continue
             if not start <= timestamp <= end:
                 continue
+            event = {
+                "data_source": "network_connection",
+                "category": "network_connection",
+                "product": "linux",
+                "sensor": "lab_net_syscall",
+                "Computer": host,
+                "DestinationIp": ip,
+                "DestinationPort": port,
+                "Protocol": "tcp",
+                "ProcessId": pid,
+                "UtcTime": datetime.fromtimestamp(timestamp, UTC).isoformat(),
+            }
             if "= 0" in line or "EINPROGRESS" in line:
-                events.append(
-                    {
-                        "data_source": "network_connection",
-                        "category": "network_connection",
-                        "product": "linux",
-                        "sensor": "lab_net_syscall",
-                        "Computer": host,
-                        "DestinationIp": ip,
-                        "DestinationPort": port,
-                        "Protocol": "tcp",
-                        "ProcessId": pid,
-                        "UtcTime": datetime.fromtimestamp(timestamp, UTC).isoformat(),
-                    }
-                )
+                events.append(event)
+            elif "<unfinished ...>" in line:
+                pending[match["pid"]] = event
+        else:
+            resumed = _RESUMED_NET.match(line)
+            if resumed and resumed["pid"] in pending:
+                event = pending.pop(resumed["pid"])
+                if "= 0" in line or "EINPROGRESS" in line:
+                    completed = float(resumed["time"])
+                    entered = datetime.fromisoformat(event["UtcTime"]).timestamp()
+                    if max(start, entered) <= completed <= end:
+                        events.append(event)
     return events
 
 
@@ -433,9 +447,9 @@ class LabSensorFusion:
                     if not candidates:
                         continue
                     parent = candidates[-1]
-                    if "Image" not in ev and "Image" in parent:
+                    if not ev.get("Image") and parent.get("Image"):
                         ev["Image"] = parent["Image"]
-                    if "CommandLine" not in ev and "CommandLine" in parent:
+                    if not ev.get("CommandLine") and parent.get("CommandLine"):
                         ev["CommandLine"] = parent["CommandLine"]
         return events
 
