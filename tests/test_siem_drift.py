@@ -313,8 +313,9 @@ def test_notify_siem_drift(mock_workspace: Path):
 
 def test_cli_audit_siem_force_flag(mock_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--force must reach audit_workspace_queries so watermarks can be bypassed."""
-    from hecate_runner import cli
     from typer.testing import CliRunner
+
+    from hecate_runner import cli
 
     seen: dict[str, object] = {}
 
@@ -993,7 +994,6 @@ def test_undeploy_without_retire_keeps_versions_active_and_surfaces_missing(
         audit_workspace_queries,
         decommission_hunt_queries,
         init_drift_db,
-        invalidate_hunt_drift_watermark,
         save_drift_state,
     )
 
