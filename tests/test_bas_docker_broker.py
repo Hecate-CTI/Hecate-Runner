@@ -123,10 +123,10 @@ def test_socket_authorization_uses_the_kernel_peer_identity(tmp_path, allowed):
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
                 connection.settimeout(2)
                 connection.connect(endpoint)
-                connection.sendall(json.dumps({"args": ["inspect", "agent"]}).encode() + b"\n")
                 try:
+                    connection.sendall(json.dumps({"args": ["inspect", "agent"]}).encode() + b"\n")
                     response = connection.recv(4096)
-                except ConnectionResetError:
+                except (BrokenPipeError, ConnectionResetError):
                     response = b""
             assert bool(response) is allowed
             assert server.policy.dispatch.called is allowed
