@@ -207,6 +207,13 @@ class SlackNotificationRouter:
 
 def notify_draft_created(settings: Settings, result: RunResult) -> None:
     """Post a Slack message for a newly created draft hunt."""
+    if result.outcome == "incremental_enrichment" and not settings.slack_notify_enrichment:
+        log.info(
+            "Skipping Slack notification for incremental enrichment on %s (slack_notify_enrichment=False)",
+            result.hunt_id,
+        )
+        return
+
     router = SlackNotificationRouter(settings)
     if not router.is_configured:
         return
@@ -319,6 +326,14 @@ def notify_purple_team(
 
 def notify_threat_intake(settings: Settings, item: CTIItem) -> None:
     """Route critical incoming threat intelligence to specialized threat feeds."""
+    if not settings.slack_notify_intake:
+        log.debug(
+            "Skipping Slack threat intake notification for %s:%s (slack_notify_intake=False)",
+            item.source,
+            item.identifier or item.title,
+        )
+        return
+
     router = SlackNotificationRouter(settings)
     if not router.is_configured:
         return
