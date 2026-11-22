@@ -117,6 +117,13 @@ def audit_siem_cmd(
         bool,
         typer.Option("--verbose", "-v", help="Show full query drift diffs."),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Ignore per-hunt mtime watermarks and re-check every query against the SIEM.",
+        ),
+    ] = False,
 ) -> None:
     """Audit all workspace hunting queries across SIEM & EDR platforms for detection drift."""
     settings = _get_settings()
@@ -128,7 +135,7 @@ def audit_siem_cmd(
         )
 
     report = siem_drift.audit_workspace_queries(
-        settings.hecate_workspace, target=target, dry_run=dry_run
+        settings.hecate_workspace, target=target, dry_run=dry_run, force=force
     )
 
     in_sync = report.get("in_sync_count", 0)

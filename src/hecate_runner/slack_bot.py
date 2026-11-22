@@ -158,6 +158,16 @@ def undeploy_queries_for_hunt(
             }
         )
 
+    # Live undeploy does not touch local query files; drop the hunt's watermark so
+    # audit-siem cannot reuse a stale in_sync cache for remotes that are now gone.
+    if not dry_run and any(r.get("ok") for r in results):
+        try:
+            from hecate_runner.siem_drift import invalidate_hunt_drift_watermark
+
+            invalidate_hunt_drift_watermark(workspace, hunt_id)
+        except Exception as exc:
+            log.warning("Could not invalidate drift watermark for %s: %s", hunt_id, exc)
+
     return results
 
 

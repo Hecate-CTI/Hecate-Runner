@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import secrets
@@ -93,6 +94,13 @@ def _relative(workspace: Path, path: Path) -> Path:
     raise ValueError("Artifact path escapes the selected workspace")
 
 
+def _is_permission_denied(exc: BaseException) -> bool:
+    return isinstance(exc, PermissionError) or getattr(exc, "errno", None) in (
+        errno.EACCES,
+        errno.EPERM,
+    )
+
+
 @contextmanager
 def _parent(workspace: Path, path: Path) -> Iterator[tuple[Path, int | None]]:
     relative = _relative(workspace, path)
@@ -104,16 +112,23 @@ def _parent(workspace: Path, path: Path) -> Iterator[tuple[Path, int | None]]:
         return
     # Pin every directory descriptor. A rename/symlink race cannot redirect
     # the final open or replacement outside the selected workspace.
-    descriptors = []
+    # Catch OSError only while opening parents — never around yield — so
+    # PermissionError from the caller's file open is not rewritten.
+    descriptors: list[int] = []
     try:
-        fd = os.open(workspace.resolve(), os.O_RDONLY | os.O_DIRECTORY)
-        descriptors.append(fd)
-        for component in relative.parts[:-1]:
-            fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        try:
+            fd = os.open(workspace.resolve(), os.O_RDONLY | os.O_DIRECTORY)
             descriptors.append(fd)
-        yield checked, fd
-    except OSError as exc:
-        raise ValueError("Artifact path is not a safe workspace path") from exc
+            for component in relative.parts[:-1]:
+                fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                descriptors.append(fd)
+        except OSError as exc:
+            if _is_permission_denied(exc):
+                raise PermissionError(
+                    f"Permission denied accessing artifact path {checked.name}"
+                ) from exc
+            raise ValueError("Artifact path is not a safe workspace path") from exc
+        yield checked, descriptors[-1]
     finally:
         for fd in reversed(descriptors):
             os.close(fd)
@@ -133,6 +148,12 @@ def read_artifact(path: Path, workspace: Path) -> str:
                     checked.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd
                 )
             except OSError as exc:
+                # Preserve ACL/permission failures so operators do not confuse them
+                # with symlink / non-regular-file safety checks.
+                if _is_permission_denied(exc):
+                    raise PermissionError(
+                        f"Permission denied reading artifact {checked.name}"
+                    ) from exc
                 raise ValueError("Artifact is not a safe regular file") from exc
             with os.fdopen(fd, "rb") as stream:
                 if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
