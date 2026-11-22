@@ -468,3 +468,22 @@ level: high
     assert result.exit_code == 0
     assert "for H-0032" in result.stdout
     assert "webserver__http_request" not in result.stdout  # must not use filename as hunt id
+
+
+def test_synthesize_handles_empty_list_constraints() -> None:
+    rule_yaml = """
+title: Rule With Empty Selection List
+logsource:
+    category: process_creation
+    product: linux
+detection:
+    selection:
+        Image|endswith: []
+        CommandLine|contains:
+            - 'curl'
+    condition: selection
+"""
+    tp, controls = synthesize_events_from_rule(rule_yaml, hunt_id="H-EMPTY", technique_id="T1059")
+    assert tp["CommandLine"].startswith("/bin/sh")
+    assert "curl" in tp["CommandLine"]
+    assert len(controls) == 2

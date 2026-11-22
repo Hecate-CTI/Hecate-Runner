@@ -8,6 +8,7 @@ whether Hecate's transpiled detection query or Sigma rule successfully triggers 
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -139,13 +140,20 @@ class DetectionVerifier:
         if isinstance(value, datetime):
             parsed = value
         elif isinstance(value, (int, float)):
-            raw = float(value)
-            if raw > 1e11:
-                raw /= 1000.0
-            parsed = datetime.fromtimestamp(raw, UTC)
+            try:
+                raw = float(value)
+                if not math.isfinite(raw):
+                    raise ValueError("Non-finite timestamp value")
+                if raw > 1e11:
+                    raw /= 1000.0
+                parsed = datetime.fromtimestamp(raw, UTC)
+            except (ValueError, TypeError, OverflowError, OSError):
+                raise ValueError("Invalid BAS timestamp") from None
         elif epoch:
             try:
                 raw = float(value)
+                if not math.isfinite(raw):
+                    raise ValueError("Non-finite timestamp value")
                 if raw > 1e11:
                     raw /= 1000.0
                 parsed = datetime.fromtimestamp(raw, UTC)
@@ -159,6 +167,8 @@ class DetectionVerifier:
             except ValueError:
                 try:
                     raw = float(value)
+                    if not math.isfinite(raw):
+                        raise ValueError("Non-finite timestamp value")
                     if raw > 1e11:
                         raw /= 1000.0
                     parsed = datetime.fromtimestamp(raw, UTC)
@@ -172,8 +182,8 @@ class DetectionVerifier:
 
     @classmethod
     def _event_in_window(cls, event: dict[str, Any], start: datetime, end: datetime) -> bool:
-        for field_name in ("timestamp_utc", "UtcTime", "_time"):
-            if field_name in event and event[field_name] is not None:
+        for field_name in ("timestamp_utc", "UtcTime", "_time", "event_time"):
+            if field_name in event and event[field_name] is not None and event[field_name] != "":
                 try:
                     stamp = cls._timestamp(event[field_name], epoch=field_name == "_time")
                 except (ValueError, TypeError, OverflowError, OSError):

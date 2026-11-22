@@ -98,7 +98,12 @@ def synthesize_events_from_rule(
             for k, v in item_dict.items():
                 f_base = base_field(k)
                 mods = extract_modifiers(k)
-                val = v[0] if isinstance(v, list) else v
+                if isinstance(v, list):
+                    if not v:
+                        continue
+                    val = v[0]
+                else:
+                    val = v
                 field_constraints.setdefault(f_base, []).append((mods, val))
 
     for f_base, constraints in field_constraints.items():

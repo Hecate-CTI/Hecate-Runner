@@ -109,3 +109,30 @@ def test_alert_proof_extracted_from_utctime_field(alert_case):
     proof = find_fired_alert(client, **args)
     assert proof is not None
     assert proof.sid == "scheduler-real"
+
+
+def test_alert_proof_fallback_when_primary_timestamp_is_corrupted(alert_case):
+    client, _record, _event, args = alert_case
+    _event["timestamp_utc"] = "CORRUPTED_TIMESTAMP"
+    _event["UtcTime"] = args["started"].isoformat()
+    proof = find_fired_alert(client, **args)
+    assert proof is not None
+    assert proof.sid == "scheduler-real"
+
+
+def test_alert_proof_extracted_from_event_time_field(alert_case):
+    client, _record, _event, args = alert_case
+    del _event["timestamp_utc"]
+    _event["event_time"] = args["started"].isoformat()
+    proof = find_fired_alert(client, **args)
+    assert proof is not None
+    assert proof.sid == "scheduler-real"
+
+
+def test_alert_proof_allows_backward_clock_skew(alert_case):
+    client, _record, _event, args = alert_case
+    _record["trigger_time"] = args["started"].timestamp() - 1.5
+    proof = find_fired_alert(client, **args)
+    assert proof is not None
+    assert proof.sid == "scheduler-real"
+    assert proof.latency_sec == 0.0
