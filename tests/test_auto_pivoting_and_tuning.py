@@ -115,6 +115,7 @@ def test_synthesize_pivot_queries_splunk() -> None:
 
     net_p = next(p for p in pivots if p["type"] == "network_egress")
     assert 'dest_ip="203.0.113.88"' in net_p["query"]
+    assert 'host="srv-app-01"' in net_p["query"]
     assert net_p["technique"] == "T1071"
 
 

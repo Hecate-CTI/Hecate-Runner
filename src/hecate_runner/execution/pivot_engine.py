@@ -61,6 +61,20 @@ class PivotExecutionResult:
         }
 
 
+def _first_valid(values: list[str], validator) -> str:
+    """Return the first entity that passes ``validator``, skipping poison values.
+
+    A single malformed parent/user must not erase otherwise-valid child-process or
+    network pivots derived from clean process/host/IP fields.
+    """
+    for raw in values:
+        try:
+            return validator(raw)
+        except (TypeError, ValueError):
+            continue
+    return ""
+
+
 def synthesize_pivot_queries(
     target_siem: str,
     entities: Mapping[str, list[str]],
@@ -77,22 +91,28 @@ def synthesize_pivot_queries(
 
     Returns:
         List of pivot specifications containing query text, rationale, and technique hints.
+
+    Raises:
+        ValueError: When every provided entity is invalid (nothing safe to query).
     """
     dialect = target_siem.strip().lower()
-    hosts = entities.get("hosts") or []
-    processes = entities.get("processes") or []
-    parent_procs = entities.get("parent_processes") or []
-    users = entities.get("users") or []
-    ips = entities.get("ips") or []
+    hosts = list(entities.get("hosts") or [])
+    processes = list(entities.get("processes") or [])
+    parent_procs = list(entities.get("parent_processes") or [])
+    users = list(entities.get("users") or [])
+    ips = list(entities.get("ips") or [])
 
-    primary_host = hosts[0] if hosts else ""
-    primary_proc = processes[0] if processes else ""
-    primary_parent = parent_procs[0] if parent_procs else ""
-    primary_user = users[0] if users else ""
-    primary_ip = address(ips[0]) if ips else ""
-    checked_host(primary_host)
-    for value in (primary_proc, primary_parent, primary_user):
-        entity(value)
+    if not any((hosts, processes, parent_procs, users, ips)):
+        return []
+
+    primary_host = _first_valid(hosts, checked_host)
+    primary_proc = _first_valid(processes, entity)
+    primary_parent = _first_valid(parent_procs, entity)
+    primary_user = _first_valid(users, entity)
+    primary_ip = _first_valid(ips, address)
+
+    if not any((primary_host, primary_proc, primary_parent, primary_user, primary_ip)):
+        raise ValueError("Invalid pivot entity")
 
     pivots: list[dict[str, str]] = []
 
@@ -173,41 +193,52 @@ def _build_child_process_query(dialect: str, host: str, proc: str) -> str:
 
 
 def _build_network_egress_query(dialect: str, host: str, proc: str, ip: str) -> str:
-    clean_proc = basename(proc)
+    clean_proc = basename(proc) if proc else ""
     ip = address(ip)
-    host_value = quoted(checked_host(host), dialect)
-    proc_value = quoted(clean_proc, dialect)
-    pattern = quoted(clean_proc, dialect, prefix="*")
-    ip_value = quoted(ip, dialect)
+    host = checked_host(host) if host else ""
+    host_value = quoted(host, dialect) if host else ""
+    proc_value = quoted(clean_proc, dialect) if clean_proc else ""
+    pattern = quoted(clean_proc, dialect, prefix="*") if clean_proc else ""
+    ip_value = quoted(ip, dialect) if ip else ""
     if dialect in ("splunk", "spl"):
-        if ip:
-            return f"index=* (dest_ip={ip_value} OR dst={ip_value} OR destination_ip={ip_value}) | head 50"
         host_filter = f"host={host_value} " if host else ""
+        if ip:
+            return (
+                f"index=* {host_filter}"
+                f"(dest_ip={ip_value} OR dst={ip_value} OR destination_ip={ip_value}) | head 50"
+            )
         return f"index=* {host_filter}(process_name={pattern} OR Image={pattern}) (dest_ip=* OR dst=*) | head 50"
     if dialect in ("sentinel", "sentinel_kql", "kql"):
-        if ip:
-            return f"DeviceNetworkEvents | where RemoteIP == {ip_value} | take 50"
         host_filter = f"| where DeviceName =~ {host_value} " if host else ""
+        if ip:
+            return f"DeviceNetworkEvents {host_filter}| where RemoteIP == {ip_value} | take 50"
         return f"DeviceNetworkEvents {host_filter}| where InitiatingProcessFileName =~ {proc_value} | take 50"
     if dialect in ("elastic", "elastic_eql", "eql", "es_query"):
-        if ip:
-            return f"destination.ip: {ip_value}"
         host_filter = f"host.name: {host_value} and " if host else ""
+        if ip:
+            return f"{host_filter}destination.ip: {ip_value}"
         return f"{host_filter}process.name: {pattern} and destination.ip: *"
     if dialect == "chronicle":
-        if ip:
-            return f"target.ip = {ip_value}"
         host_filter = f"principal.hostname = {host_value} and " if host else ""
+        if ip:
+            return f"{host_filter}target.ip = {ip_value}"
         return f'{host_filter}principal.process.file.full_path = {pattern} and target.ip != ""'
     if dialect in ("crowdstrike", "crowdstrike_cql", "cql", "logscale"):
-        if ip:
-            return f"#event_simpleName=NetworkConnectIP4 RemoteAddressIP4={ip_value} | limit(50)"
         host_filter = f"ComputerName={host_value} " if host else ""
+        if ip:
+            return (
+                f"#event_simpleName=NetworkConnectIP4 {host_filter}"
+                f"RemoteAddressIP4={ip_value} | limit(50)"
+            )
         return (
             f"#event_simpleName=NetworkConnectIP4 {host_filter}ImageFileName={pattern} | limit(50)"
         )
     if ip:
-        return f"SELECT * FROM network_events WHERE destination_ip = {quoted(ip, 'sql')} LIMIT 50"
+        host_filter = f"host = {quoted(host, 'sql')} AND " if host else ""
+        return (
+            f"SELECT * FROM network_events WHERE {host_filter}"
+            f"destination_ip = {quoted(ip, 'sql')} LIMIT 50"
+        )
     host_filter = f"host = {quoted(host, 'sql')} AND " if host else ""
     return f"SELECT * FROM network_events WHERE {host_filter}POSITION(LOWER({quoted(clean_proc, 'sql')}) IN LOWER(process_name)) > 0 LIMIT 50"
 
