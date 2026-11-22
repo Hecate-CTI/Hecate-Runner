@@ -14,6 +14,7 @@ import ipaddress
 import logging
 import re
 import threading
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -295,8 +296,56 @@ def _extract_cve_years(cves: set[str]) -> set[int]:
 
 
 _VERSION_CONTEXT_PREFIX_RE = re.compile(
-    r"(?i)(?:version|versions|ver|v\.?|jdk|openjdk|build|update|release|patch|rev|revision|glibc|kernel|openssl|python|node|ruby|go|curl|git|linux|apache|nginx|tomcat|software|lib[\w-]*|fixed\s+in|affected(?:\s+versions?)?|upgrade\s+to|released\s+in)(?:\s+[\w.-]+){0,2}\s*[:=vV-]?\s*[-*]?\s*(?:(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:[,\s\-*]+|and|or|\/)+)*$"
+    r"(?i)(?<![\w.-])(?:versions?|ver|v\.?|jdk|openjdk|build|update|release|patch|rev|revision|glibc|kernel|openssl|lib[\w-]*|fixed\s+in|affected(?:\s+versions?)?|upgrade\s+to|released\s+in)"
+    r"(?:\s+(?:versions?|ver|v\.?|jdk|openjdk|build|update|release|patch|rev|revision|lts|se|runtime)){0,2}"
+    r"\s*[:=vV-]?\s*[-*]?\s*(?:(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:[,\s\-*]+|and|or|\/)+)*(?:`|\[)?$"
 )
+_VERSION_COLUMN_RE = re.compile(r"\b(?:versions?|baseline|fixed|patch|build|release)\b", re.I)
+_NETWORK_COLUMN_RE = re.compile(
+    r"\b(?:ipv?[46]?|addresses?|c2|iocs?|indicators?|hosts?|endpoints?|destination|source|domains?)\b",
+    re.I,
+)
+
+
+def _table_ip_contexts(text: str) -> dict[int, bool]:
+    """Map IP positions to version/network columns in one forward table scan."""
+    contexts: dict[int, bool] = {}
+    version_columns: set[int] = set()
+    network_columns: set[int] = set()
+    line_start = 0
+    for line in text.splitlines(keepends=True):
+        if "|" not in line:
+            version_columns.clear()
+            network_columns.clear()
+            line_start += len(line)
+            continue
+        cells = line.split("|")
+        matches = list(_IPV4_RE.finditer(line))
+        # Labels establish a header; numeric data and Markdown separators keep
+        # the preceding header until the table ends or a new header appears.
+        if not matches and any(
+            _VERSION_COLUMN_RE.search(cell) or _NETWORK_COLUMN_RE.search(cell) for cell in cells
+        ):
+            version_columns = {
+                column
+                for column, cell in enumerate(cells)
+                if _VERSION_COLUMN_RE.search(cell) and not _NETWORK_COLUMN_RE.search(cell)
+            }
+            network_columns = {
+                column for column, cell in enumerate(cells) if _NETWORK_COLUMN_RE.search(cell)
+            }
+        if version_columns or network_columns:
+            separators = [index for index, character in enumerate(line) if character == "|"]
+            for match in matches:
+                column = bisect_right(separators, match.start())
+                if column in version_columns:
+                    contexts[line_start + match.start()] = True
+                elif column in network_columns:
+                    contexts[line_start + match.start()] = False
+        line_start += len(line)
+    return contexts
+
+
 _VERSION_CONTEXT_SUFFIX_RE = re.compile(
     r"(?i)^(?:\.GA|\.Final|-ea|-rc\d*|-beta\d*|-alpha\d*|\.tar|\.zip|\.gz|\.deb|\.rpm|\+[\w.-]+)"
 )
@@ -324,39 +373,6 @@ def _is_version_context(text: str, start: int, end: int) -> bool:
     if start > 0 and text[start - 1] == "/":
         scheme_idx = prefix.rfind("://")
         if scheme_idx == -1 or ("/" in prefix[scheme_idx + 3 :]):
-            return True
-
-    # Inside a markdown table row (e.g. '| JDK 17 | 17.0.1.0 | 17.0.21.1 |')
-    line_start = text.rfind("\n", 0, start)
-    line_start = 0 if line_start == -1 else line_start + 1
-    line_end = text.find("\n", end)
-    line_end = len(text) if line_end == -1 else line_end
-    line = text[line_start:line_end]
-    if line.count("|") >= 2:
-        window = text[max(0, start - 250) : min(len(text), end + 250)].lower()
-        if any(
-            term in window
-            for term in (
-                "version",
-                "baseline",
-                "fixed",
-                "patch",
-                "build",
-                "release",
-                "openjdk",
-                "jdk",
-            )
-        ):
-            return True
-
-    # Markdown table column or link header indicating version
-    # e.g. "| 17.0.21.1 |" or "[17.0.21.1]"
-    if start > 0 and text[start - 1] in "|[" and suffix.startswith((" |", "]", "|")):
-        window = text[max(0, start - 200) : min(len(text), end + 200)].lower()
-        if any(
-            term in window
-            for term in ("version", "fixed in", "affected", "openjdk", "jdk", "release")
-        ):
             return True
 
     return False
@@ -429,29 +445,36 @@ class ThreatEntityExtractor:
         """Return public IPv4 addresses and candidate C2 domains."""
         iocs: set[str] = set()
 
-        # Extract from metadata indicators
+        # Inspect every exact occurrence once. A genuine network occurrence
+        # takes precedence when the same value also appears as a version.
+        version_values: set[str] = set()
+        table_contexts = _table_ip_contexts(text) if text else {}
+        if text:
+            for match in _IPV4_RE.finditer(text):
+                ip = match.group(0)
+                if _is_public_ip(ip):
+                    table_context = table_contexts.get(match.start())
+                    if table_context is True or (
+                        table_context is None
+                        and _is_version_context(text, match.start(), match.end())
+                    ):
+                        version_values.add(ip)
+                    else:
+                        iocs.add(ip)
+        version_only = version_values - iocs
+
+        # Metadata can also contain indicators absent from the prose. Do not
+        # confuse an address with a substring of another address/version.
         if metadata and "indicators" in metadata:
             ind = metadata["indicators"]
             for ip in ind.get("ip-dst", []) + ind.get("ipv4", []) + ind.get("ip-src", []):
-                if isinstance(ip, str) and _is_public_ip(ip):
-                    cleaned_ip = ip.strip()
-                    if text and cleaned_ip in text:
-                        m_pos = text.find(cleaned_ip)
-                        if m_pos != -1 and _is_version_context(
-                            text, m_pos, m_pos + len(cleaned_ip)
-                        ):
-                            continue
-                    iocs.add(cleaned_ip)
+                if isinstance(ip, str) and _is_public_ip(ip) and ip.strip() not in version_only:
+                    iocs.add(ip.strip())
             for dom in ind.get("domain", []) + ind.get("hostname", []):
                 if isinstance(dom, str) and _is_relevant_domain(dom):
                     iocs.add(dom.strip().lower())
 
-        # Extract from text
         if text:
-            for m in _IPV4_RE.finditer(text):
-                ip = m.group(0)
-                if _is_public_ip(ip) and not _is_version_context(text, m.start(), m.end()):
-                    iocs.add(ip.strip())
             for dom in _DOMAIN_RE.findall(text):
                 if _is_relevant_domain(dom):
                     iocs.add(dom.strip().lower())
