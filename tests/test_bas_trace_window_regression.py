@@ -136,3 +136,14 @@ def test_event_in_window_timestamp_handling():
     # 5. Out of window
     ev5 = {"timestamp_utc": None, "UtcTime": "2026-11-22T11:50:00Z"}
     assert not DetectionVerifier._event_in_window(ev5, start, end)
+
+
+def test_file_trace_traversal_paths_are_rejected():
+    trace = """
+    101 101.000 openat(AT_FDCWD, "/tmp/../etc/passwd", O_RDONLY) = 3
+    102 102.000 creat("/tmp/../../root/.bashrc", 0644) = 4
+    103 103.000 unlinkat(AT_FDCWD, "/tmp/../etc/shadow", 0) = 0
+    104 104.000 rename("/tmp/source.tmp", "/tmp/../bin/evil") = 0
+    105 105.000 openat(AT_FDCWD, "/tmp/bad\\0null", O_RDONLY) = 3
+    """
+    assert not parse_file_trace(trace, start=100, end=110, host="fixture")
