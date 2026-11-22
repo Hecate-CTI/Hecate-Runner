@@ -487,4 +487,3 @@ detection:
     assert tp["CommandLine"].startswith("/bin/sh")
     assert "curl" in tp["CommandLine"]
     assert len(controls) == 2
-

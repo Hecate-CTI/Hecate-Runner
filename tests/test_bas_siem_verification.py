@@ -520,7 +520,9 @@ def test_legacy_alert_history_schema_migrates_without_granting_proof(tmp_path):
     assert get_siem_drift_metrics(tmp_path)["bas_verified_alerts_count"] == 0
 
 
-def test_verify_detonation_alert_gracefully_handles_none_timestamps(mock_siem_workspace: Path, monkeypatch) -> None:
+def test_verify_detonation_alert_gracefully_handles_none_timestamps(
+    mock_siem_workspace: Path, monkeypatch
+) -> None:
     from hecate_runner.bas.base import DetonationResult
 
     monkeypatch.setenv("SPLUNK_HOST", "https://localhost:8089")
@@ -553,10 +555,10 @@ def test_verify_detonation_alert_gracefully_handles_none_timestamps(mock_siem_wo
         patch("hecate_agent.core.splunk_client.SplunkClient", return_value=mock_client),
         patch("hecate_runner.bas.siem_verifier.forward_events_to_splunk", return_value=1),
     ):
-        verifier = SiemAlertVerifier(workspace=mock_siem_workspace, max_wait_sec=0.02, poll_interval_sec=0.001)
+        verifier = SiemAlertVerifier(
+            workspace=mock_siem_workspace, max_wait_sec=0.02, poll_interval_sec=0.001
+        )
         res = verifier.verify_detonation_alert(detonation, hunt_id="H-0011", siem_target="splunk")
     assert res.status == "query_match"
     assert any("Invalid detonation wall-clock timestamp" in note for note in res.notes or [])
     assert mock_client.create_search_job.call_args.kwargs["earliest_time"] == "-2m"
-
-

@@ -136,4 +136,3 @@ def test_alert_proof_allows_backward_clock_skew(alert_case):
     assert proof is not None
     assert proof.sid == "scheduler-real"
     assert proof.latency_sec == 0.0
-

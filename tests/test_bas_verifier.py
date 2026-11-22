@@ -321,4 +321,3 @@ def test_event_in_window_supports_event_time_fallback():
         "event_time": now.isoformat(),
     }
     assert DetectionVerifier._event_in_window(event, w_start, w_end)
-
