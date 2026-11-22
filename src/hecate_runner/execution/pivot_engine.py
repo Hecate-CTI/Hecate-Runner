@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -61,7 +61,7 @@ class PivotExecutionResult:
         }
 
 
-def _first_valid(values: list[str], validator) -> str:
+def _first_valid(values: list[str], validator: Callable[[str], str]) -> str:
     """Return the first entity that passes ``validator``, skipping poison values.
 
     A single malformed parent/user must not erase otherwise-valid child-process or
@@ -69,7 +69,7 @@ def _first_valid(values: list[str], validator) -> str:
     """
     for raw in values:
         try:
-            return validator(raw)
+            return str(validator(raw))
         except (TypeError, ValueError):
             continue
     return ""
