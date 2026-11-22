@@ -839,6 +839,26 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_SLACK_INTERACTIVE_ENABLED",
         description="Enable interactive Slack Block Kit action buttons and Socket Mode bot.",
     )
+    slack_notify_intake: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_SLACK_NOTIFY_INTAKE",
+        description="Post individual Slack notifications for every ingested CTI item (defaults to false to prevent alert fatigue).",
+    )
+    slack_notify_enrichment: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_SLACK_NOTIFY_ENRICHMENT",
+        description="Post Slack notifications when existing draft hunts receive incremental enrichment.",
+    )
+    slack_notify_clean_sweeps: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_SLACK_NOTIFY_CLEAN_SWEEPS",
+        description="Post Slack notifications for automated hunt sweeps that yield 0 matches (clean).",
+    )
+    slack_notify_staged_sweeps: bool = Field(
+        default=True,
+        alias="HECATE_RUNNER_SLACK_NOTIFY_STAGED_SWEEPS",
+        description="Post Slack notifications when recurring sweeps are staged pending manual approval.",
+    )
     slack_channel_ops_metrics: str = Field(
         default="#hecate-ops-metrics",
         alias="SLACK_CHANNEL_OPS_METRICS",
