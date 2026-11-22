@@ -1,6 +1,6 @@
 """Tests for Closed-Loop Detection Verifier."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -291,3 +291,34 @@ def test_sigma_pass_cannot_override_native_query_miss():
     assert not result.rule_triggered
     assert result.telemetry_arrived
     assert not result.siem_alert_fired
+
+
+@pytest.mark.parametrize(
+    "bad_val",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "nan",
+        "inf",
+        "-inf",
+        1e30,
+    ],
+)
+def test_timestamp_rejects_non_finite_values(bad_val):
+    with pytest.raises(ValueError):
+        DetectionVerifier._timestamp(bad_val)
+
+
+def test_event_in_window_supports_event_time_fallback():
+    now = datetime(2026, 11, 22, 14, 0, 0, tzinfo=UTC)
+    w_start = now - timedelta(seconds=10)
+    w_end = now + timedelta(seconds=30)
+    event = {
+        "timestamp_utc": "CORRUPTED",
+        "UtcTime": "",
+        "_time": None,
+        "event_time": now.isoformat(),
+    }
+    assert DetectionVerifier._event_in_window(event, w_start, w_end)
+

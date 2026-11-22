@@ -518,3 +518,45 @@ def test_legacy_alert_history_schema_migrates_without_granting_proof(tmp_path):
     assert row["siem_alert_fired"] == 0
     assert row["alert_search_id"] == ""
     assert get_siem_drift_metrics(tmp_path)["bas_verified_alerts_count"] == 0
+
+
+def test_verify_detonation_alert_gracefully_handles_none_timestamps(mock_siem_workspace: Path, monkeypatch) -> None:
+    from hecate_runner.bas.base import DetonationResult
+
+    monkeypatch.setenv("SPLUNK_HOST", "https://localhost:8089")
+    monkeypatch.setenv("SPLUNK_TOKEN", "mock-token-xyz")
+
+    detonation = DetonationResult(
+        success=True,
+        hunt_id="H-0011",
+        technique_id="T1003.001",
+        ability_id="ab-test",
+        provider="caldera",
+        cleanup_success=True,
+        start_time_utc=None,  # None timestamp
+        end_time_utc=None,
+        duration_seconds=1.0,
+        exit_code=0,
+        stdout="ok",
+        stderr="",
+        telemetry_signatures=[{"CommandLine": "MiniDump.exe", "data_source": "process_creation"}],
+    )
+    mock_client = MagicMock()
+    mock_client.create_search_job.return_value = "1793600999.123"
+    mock_client.get_search_job_status.return_value = {
+        "entry": [{"content": {"isDone": True, "resultCount": 1}}]
+    }
+    mock_client.get_search_results.return_value = [
+        {"CommandLine": "rundll32.exe comsvcs.dll MiniDump"}
+    ]
+    with (
+        patch("hecate_agent.core.splunk_client.SplunkClient", return_value=mock_client),
+        patch("hecate_runner.bas.siem_verifier.forward_events_to_splunk", return_value=1),
+    ):
+        verifier = SiemAlertVerifier(workspace=mock_siem_workspace, max_wait_sec=0.02, poll_interval_sec=0.001)
+        res = verifier.verify_detonation_alert(detonation, hunt_id="H-0011", siem_target="splunk")
+    assert res.status == "query_match"
+    assert any("Invalid detonation wall-clock timestamp" in note for note in res.notes or [])
+    assert mock_client.create_search_job.call_args.kwargs["earliest_time"] == "-2m"
+
+

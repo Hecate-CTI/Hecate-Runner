@@ -434,7 +434,7 @@ class SiemAlertVerifier:
             if ended.tzinfo is None:
                 ended = ended.replace(tzinfo=UTC)
             earliest_time = str(int((started - timedelta(seconds=60)).timestamp()))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError):
             notes.append("Invalid detonation wall-clock timestamp; using the last two minutes.")
 
         try:

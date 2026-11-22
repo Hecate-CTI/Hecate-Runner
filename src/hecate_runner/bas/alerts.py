@@ -72,7 +72,7 @@ def find_fired_alert(
             triggered = float(content["trigger_time"])
         except (KeyError, TypeError, ValueError):
             continue
-        if not math.isfinite(triggered) or not started.timestamp() <= triggered <= now:
+        if not math.isfinite(triggered) or not started.timestamp() - 10 <= triggered <= now + 30:
             continue
         # Bounded evidence read. Aggregations which drop the correlation marker
         # cannot establish that this firing belongs to this execution.
@@ -87,20 +87,27 @@ def find_fired_alert(
                     pass
             if row.get("hecate_bas_run_id") != run_id or row.get("hecate_hunt_id") != hunt_id:
                 continue
-            timestamp = row.get("timestamp_utc") or row.get("UtcTime") or row.get("_time")
-            if timestamp is None:
-                continue
-            try:
-                if isinstance(timestamp, (int, float)):
-                    observed = float(timestamp)
-                else:
-                    try:
-                        observed = float(timestamp)
-                    except (TypeError, ValueError):
-                        observed = datetime.fromisoformat(
-                            str(timestamp).replace("Z", "+00:00")
-                        ).timestamp()
-            except (TypeError, ValueError, OverflowError):
+            observed = None
+            for candidate in ("timestamp_utc", "UtcTime", "_time", "event_time"):
+                val = row.get(candidate)
+                if val is None or val == "":
+                    continue
+                try:
+                    if isinstance(val, (int, float)):
+                        t_val = float(val)
+                    else:
+                        try:
+                            t_val = float(val)
+                        except (TypeError, ValueError):
+                            t_val = datetime.fromisoformat(
+                                str(val).replace("Z", "+00:00")
+                            ).timestamp()
+                    if math.isfinite(t_val):
+                        observed = t_val
+                        break
+                except (TypeError, ValueError, OverflowError):
+                    continue
+            if observed is None:
                 continue
             if (
                 not math.isfinite(observed)
@@ -111,7 +118,7 @@ def find_fired_alert(
                 name=name,
                 sid=sid,
                 triggered_at=datetime.fromtimestamp(triggered, UTC).isoformat(),
-                latency_sec=triggered - started.timestamp(),
+                latency_sec=max(0.0, triggered - started.timestamp()),
                 event=row,
             )
     return None
