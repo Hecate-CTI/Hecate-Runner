@@ -17,8 +17,9 @@ from typing import Any
 
 from hecate_runner.bas.base import DetonationResult, SafetyViolationError
 from hecate_runner.bas.docker_access import run_docker
+from hecate_runner.bas.paths import SENSOR_TRACE_PATH
 
-TRACE_PATH = "/tmp/hecate-exec.trace"
+TRACE_PATH = SENSOR_TRACE_PATH
 APPROVED_AGENT_IMAGES = {
     "sha256:63dbe5e24c5b8b852ddf0680032488291363c23b5b4fa975445ea0f41a909fbd",
     "sha256:c3a83f3cbe4037f00f338cf97d3a4bcc6477e8ef08b4ff24ec000a50d15c3d95",
@@ -61,7 +62,7 @@ _EXEC = re.compile(
     r'(?P<path>"(?:\\.|[^"\\])*")\s*,\s*'
     r"(?P<args>\[.*?\])\s*,"
 )
-_RESUMED = re.compile(r"^\s*(\d+)\s+\d+\.\d+\s+<\.\.\. execve resumed>.*= 0$")
+_RESUMED = re.compile(r"^\s*(\d+)\s+(?P<time>\d+\.\d+)\s+<\.\.\. execve resumed>.*= 0$")
 
 _OPEN_SYSCALL = re.compile(
     r"^\s*(?P<pid>\d+)\s+(?P<time>\d+\.\d+)\s+(?:open|openat)\((?:AT_FDCWD,\s*)?"
@@ -135,7 +136,11 @@ def parse_exec_trace(
         else:
             resumed = _RESUMED.match(line)
             if resumed and resumed[1] in pending:
-                events.append(pending.pop(resumed[1]))
+                event = pending.pop(resumed[1])
+                completed = float(resumed["time"])
+                entered = datetime.fromisoformat(event["UtcTime"]).timestamp()
+                if max(start, entered) <= completed <= end:
+                    events.append(event)
     return events
 
 
@@ -303,7 +308,9 @@ def parse_file_trace(
             ev = pending.pop(m_res["pid"])
             try:
                 ret = int(m_res["ret"])
-                if ret >= 0:
+                completed = float(m_res["time"])
+                entered = datetime.fromisoformat(ev["UtcTime"]).timestamp()
+                if ret >= 0 and max(start, entered) <= completed <= end:
                     events.append(ev)
             except ValueError:
                 pass
@@ -423,7 +430,9 @@ class LabSensorFusion:
                     ev_time = str(ev.get("UtcTime", ""))
                     # Select the process creation that occurred at or before this event
                     candidates = [p for p in procs if str(p.get("UtcTime", "")) <= ev_time]
-                    parent = candidates[-1] if candidates else procs[0]
+                    if not candidates:
+                        continue
+                    parent = candidates[-1]
                     if "Image" not in ev and "Image" in parent:
                         ev["Image"] = parent["Image"]
                     if "CommandLine" not in ev and "CommandLine" in parent:

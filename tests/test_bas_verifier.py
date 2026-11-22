@@ -49,6 +49,7 @@ def make_sample_detonation(
         else [
             {
                 "data_source": "process_creation",
+                "timestamp_utc": now.isoformat(),
                 "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
                 "CommandLine": "powershell.exe -enc AAAAA...",
                 "User": "SYSTEM",

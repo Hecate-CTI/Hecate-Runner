@@ -262,7 +262,7 @@ def test_cli_independent_lab_observations_remain_locally_verified(tmp_path, monk
     )
     sensor = Mock()
     sensor.collect_fused.return_value = [
-        {"Image": "/usr/bin/whoami", "data_source": "process_creation"}
+        {"Image": "/usr/bin/whoami", "data_source": "process_creation", "timestamp_utc": now}
     ]
     settings = Settings(
         _env_file=None,

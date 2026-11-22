@@ -115,15 +115,10 @@ class DetectionVerifier:
         self, start_utc: str, end_utc: str
     ) -> tuple[datetime, datetime, str, str]:
         """Compute search window around detonation with backward skew and ingestion slack."""
-        try:
-            start_dt = datetime.fromisoformat(start_utc.replace("Z", "+00:00"))
-        except Exception:
-            start_dt = datetime.now(UTC)
-
-        try:
-            end_dt = datetime.fromisoformat(end_utc.replace("Z", "+00:00"))
-        except Exception:
-            end_dt = start_dt + timedelta(seconds=10)
+        start_dt = self._timestamp(start_utc)
+        end_dt = self._timestamp(end_utc)
+        if start_dt > end_dt:
+            raise ValueError("BAS execution window is reversed")
 
         # 10s backward skew for clock drift, forward slack for ingestion delay
         window_start = start_dt - timedelta(seconds=10)
@@ -135,6 +130,39 @@ class DetectionVerifier:
             window_start.isoformat(),
             window_end.isoformat(),
         )
+
+    @staticmethod
+    def _timestamp(value: Any, *, epoch: bool = False) -> datetime:
+        """Parse explicit aware wall-clock evidence; never substitute the current time."""
+        if isinstance(value, bool) or value is None:
+            raise ValueError("Missing or invalid BAS timestamp")
+        if isinstance(value, datetime):
+            parsed = value
+        elif epoch:
+            try:
+                parsed = datetime.fromtimestamp(float(value), UTC)
+            except (ValueError, TypeError, OverflowError, OSError):
+                if not isinstance(value, str):
+                    raise ValueError("Invalid BAS event timestamp") from None
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        elif isinstance(value, str):
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            raise ValueError("Invalid BAS timestamp")
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("BAS timestamps require an explicit timezone")
+        return parsed.astimezone(UTC)
+
+    @classmethod
+    def _event_in_window(cls, event: dict[str, Any], start: datetime, end: datetime) -> bool:
+        for field_name in ("timestamp_utc", "UtcTime", "_time"):
+            if field_name in event:
+                try:
+                    stamp = cls._timestamp(event[field_name], epoch=field_name == "_time")
+                except (ValueError, TypeError, OverflowError, OSError):
+                    return False
+                return start <= stamp <= end
+        return False
 
     def verify_detonation(
         self,
@@ -199,9 +227,29 @@ class DetectionVerifier:
             )
 
         # 2. Formulate execution time window
-        _, _, win_start_str, win_end_str = self._calculate_time_window(
-            detonation.start_time_utc, detonation.end_time_utc
-        )
+        try:
+            window_start, window_end, win_start_str, win_end_str = self._calculate_time_window(
+                detonation.start_time_utc, detonation.end_time_utc
+            )
+        except (ValueError, TypeError, OverflowError, OSError):
+            return VerificationResult(
+                hunt_id=hunt_id,
+                technique_id=technique_id,
+                ability_id=ability_id,
+                provider=provider,
+                status=VerificationStatus.ERROR,
+                telemetry_arrived=False,
+                rule_triggered=False,
+                detonation_start_utc=detonation.start_time_utc,
+                detonation_end_utc=detonation.end_time_utc,
+                window_start_utc="",
+                window_end_utc="",
+                backend=backend,
+                fidelity_scope=fidelity_scope,
+                notes=[
+                    "Invalid BAS execution timestamps; verification requires an ordered, timezone-aware window."
+                ],
+            )
 
         telemetry_arrived = False
         rule_triggered = False
@@ -218,9 +266,22 @@ class DetectionVerifier:
         events_to_evaluate = [
             e
             for e in events_to_evaluate
-            if e.get("data_source") not in {"caldera_link", "cloud_control_plane"}
+            if isinstance(e, dict)
+            and e.get("data_source") not in {"caldera_link", "cloud_control_plane"}
             and e.get("sensor") != "lab_file_delta"
         ]
+        if not simulation:
+            observed_count = len(events_to_evaluate)
+            events_to_evaluate = [
+                event
+                for event in events_to_evaluate
+                if self._event_in_window(event, window_start, window_end)
+            ]
+            discarded = observed_count - len(events_to_evaluate)
+            if discarded:
+                notes.append(
+                    f"Excluded {discarded} event(s) without valid timestamps in the BAS execution window."
+                )
         if events_to_evaluate:
             telemetry_arrived = True
             notes.append(

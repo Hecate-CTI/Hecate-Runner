@@ -26,6 +26,7 @@ from typing import Any
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.bas.base import SafetyViolationError
 from hecate_runner.bas.docker_access import run_docker
+from hecate_runner.bas.paths import permitted_tmp_path
 
 _fcntl: ModuleType | None
 try:
@@ -213,7 +214,7 @@ def clean_container_tmpfs(
     purged: list[str] = []
     for path in targets:
         # Extra safety check: never touch hecate-exec.trace or root or outside /tmp
-        if not path.startswith("/tmp/") or path == "/tmp/hecate-exec.trace" or ".." in path:
+        if not isinstance(path, str) or not permitted_tmp_path(path):
             continue
         try:
             res = run_docker(

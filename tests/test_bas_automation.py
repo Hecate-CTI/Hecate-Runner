@@ -432,6 +432,7 @@ def test_fallback_to_mock_does_not_deny_live_approved_automation(tmp_path, monke
             "Image": "/usr/bin/whoami",
             "CommandLine": "whoami",
             "User": "root",
+            "timestamp_utc": detonation.start_time_utc,
         }
     ]
     monkeypatch.setattr(
