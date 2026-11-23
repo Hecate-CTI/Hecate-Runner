@@ -55,7 +55,7 @@ def deploy_queries_for_hunt(
         log.warning("Query directory not found for %s at %s", hunt_id, query_dir)
         return []
 
-    from hecate_agent.api import deploy_transpiled_query
+    from hecate_agent.api import deploy_transpiled_query, get_query_deployer
 
     query_exts = {
         ".kql": "sentinel_kql",
@@ -67,33 +67,35 @@ def deploy_queries_for_hunt(
     }
 
     results: list[dict[str, Any]] = []
-    for q_file in sorted(query_dir.iterdir()):
-        tgt = query_exts.get(q_file.suffix.lower())
-        if not tgt:
-            continue
-        if target and target.lower() != tgt.lower():
-            continue
+    with get_query_deployer() as deployer:
+        for q_file in sorted(query_dir.iterdir()):
+            tgt = query_exts.get(q_file.suffix.lower())
+            if not tgt:
+                continue
+            if target and target.lower() != tgt.lower():
+                continue
 
-        q_text = read_artifact(q_file, workspace).strip()
-        title = q_file.stem.replace("__", " - ").replace("_", " ").title()
-        res = deploy_transpiled_query(
-            target=tgt,
-            query=q_text,
-            hunt_id=hunt_id,
-            title=title,
-            dry_run=dry_run,
-        )
-        results.append(
-            {
-                "file": q_file.name,
-                "target": tgt,
-                "status": res.get("status"),
-                "ok": res.get("ok", False),
-                "remote_id": res.get("remote_id"),
-                "detail": res.get("detail", ""),
-                "request_summary": res.get("request_summary", {}),
-            }
-        )
+            q_text = read_artifact(q_file, workspace).strip()
+            title = q_file.stem.replace("__", " - ").replace("_", " ").title()
+            res = deploy_transpiled_query(
+                target=tgt,
+                query=q_text,
+                hunt_id=hunt_id,
+                title=title,
+                dry_run=dry_run,
+                deployer=deployer,
+            )
+            results.append(
+                {
+                    "file": q_file.name,
+                    "target": tgt,
+                    "status": res.get("status"),
+                    "ok": res.get("ok", False),
+                    "remote_id": res.get("remote_id"),
+                    "detail": res.get("detail", ""),
+                    "request_summary": res.get("request_summary", {}),
+                }
+            )
 
     return results
 
@@ -118,7 +120,7 @@ def undeploy_queries_for_hunt(
         log.warning("Query directory not found for %s at %s", hunt_id, query_dir)
         return []
 
-    from hecate_agent.api import undeploy_transpiled_query
+    from hecate_agent.api import get_query_deployer, undeploy_transpiled_query
 
     query_exts = {
         ".kql": "sentinel_kql",
@@ -130,33 +132,35 @@ def undeploy_queries_for_hunt(
     }
 
     results: list[dict[str, Any]] = []
-    for q_file in sorted(query_dir.iterdir()):
-        tgt = query_exts.get(q_file.suffix.lower())
-        if not tgt:
-            continue
-        if target and target.lower() != tgt.lower():
-            continue
+    with get_query_deployer() as deployer:
+        for q_file in sorted(query_dir.iterdir()):
+            tgt = query_exts.get(q_file.suffix.lower())
+            if not tgt:
+                continue
+            if target and target.lower() != tgt.lower():
+                continue
 
-        q_text = read_artifact(q_file, workspace).strip()
-        title = q_file.stem.replace("__", " - ").replace("_", " ").title()
-        res = undeploy_transpiled_query(
-            target=tgt,
-            hunt_id=hunt_id,
-            title=title,
-            query=q_text,
-            dry_run=dry_run,
-        )
-        results.append(
-            {
-                "file": q_file.name,
-                "target": tgt,
-                "status": res.get("status"),
-                "ok": res.get("ok", False),
-                "remote_id": res.get("remote_id"),
-                "detail": res.get("detail", ""),
-                "request_summary": res.get("request_summary", {}),
-            }
-        )
+            q_text = read_artifact(q_file, workspace).strip()
+            title = q_file.stem.replace("__", " - ").replace("_", " ").title()
+            res = undeploy_transpiled_query(
+                target=tgt,
+                hunt_id=hunt_id,
+                title=title,
+                query=q_text,
+                dry_run=dry_run,
+                deployer=deployer,
+            )
+            results.append(
+                {
+                    "file": q_file.name,
+                    "target": tgt,
+                    "status": res.get("status"),
+                    "ok": res.get("ok", False),
+                    "remote_id": res.get("remote_id"),
+                    "detail": res.get("detail", ""),
+                    "request_summary": res.get("request_summary", {}),
+                }
+            )
 
     # Live undeploy does not touch local query files; drop the hunt's watermark so
     # audit-siem cannot reuse a stale in_sync cache for remotes that are now gone.
@@ -191,7 +195,7 @@ def sync_queries_for_hunt(
         log.warning("Query directory not found for %s at %s", hunt_id, query_dir)
         return []
 
-    from hecate_agent.api import sync_transpiled_query
+    from hecate_agent.api import get_query_deployer, sync_transpiled_query
 
     query_exts = {
         ".kql": "sentinel_kql",
@@ -203,36 +207,38 @@ def sync_queries_for_hunt(
     }
 
     results: list[dict[str, Any]] = []
-    for q_file in sorted(query_dir.iterdir()):
-        tgt = query_exts.get(q_file.suffix.lower())
-        if not tgt:
-            continue
-        if target and target.lower() != tgt.lower():
-            continue
+    with get_query_deployer() as deployer:
+        for q_file in sorted(query_dir.iterdir()):
+            tgt = query_exts.get(q_file.suffix.lower())
+            if not tgt:
+                continue
+            if target and target.lower() != tgt.lower():
+                continue
 
-        q_text = read_artifact(q_file, workspace).strip()
-        title = q_file.stem.replace("__", " - ").replace("_", " ").title()
-        res = sync_transpiled_query(
-            target=tgt,
-            query=q_text,
-            hunt_id=hunt_id,
-            title=title,
-            dry_run=dry_run,
-        )
-        results.append(
-            {
-                "file": q_file.name,
-                "target": tgt,
-                "status": res.get("status"),
-                "ok": res.get("ok", False),
-                "remote_id": res.get("remote_id"),
-                "detail": res.get("detail", ""),
-                "local_query": res.get("local_query", ""),
-                "remote_query": res.get("remote_query"),
-                "drift_diff": res.get("drift_diff"),
-                "request_summary": res.get("request_summary", {}),
-            }
-        )
+            q_text = read_artifact(q_file, workspace).strip()
+            title = q_file.stem.replace("__", " - ").replace("_", " ").title()
+            res = sync_transpiled_query(
+                target=tgt,
+                query=q_text,
+                hunt_id=hunt_id,
+                title=title,
+                dry_run=dry_run,
+                deployer=deployer,
+            )
+            results.append(
+                {
+                    "file": q_file.name,
+                    "target": tgt,
+                    "status": res.get("status"),
+                    "ok": res.get("ok", False),
+                    "remote_id": res.get("remote_id"),
+                    "detail": res.get("detail", ""),
+                    "local_query": res.get("local_query", ""),
+                    "remote_query": res.get("remote_query"),
+                    "drift_diff": res.get("drift_diff"),
+                    "request_summary": res.get("request_summary", {}),
+                }
+            )
 
     return results
 
