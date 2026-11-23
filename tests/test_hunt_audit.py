@@ -19,6 +19,7 @@ from hecate_runner.hunt_audit import (
     replace_grounding_section,
     research_text_for,
     strip_grounding_section,
+    strip_incremental_updates,
 )
 
 # The shape hunt_writer actually emits: only the first blurb line carries the
@@ -245,3 +246,38 @@ def test_research_text_is_read_from_the_workspace(tmp_path: Path):
 def test_a_missing_research_document_is_not_an_error(tmp_path: Path):
     assert research_text_for(tmp_path, "R-9999") == ""
     assert research_text_for(tmp_path, "") == ""
+
+
+def test_audit_ignores_incremental_threat_intel_updates():
+    """Appended campaign IOC tables from living dossiers must not grade as unsupported claims."""
+    hunt_with_update = (
+        HUNT
+        + """
+
+---
+
+## Incremental Threat Intel Update (2026-11-23T00:31:04Z)
+
+> **Source:** [github_poc](https://github.com/vperetti/phpbackports)
+> **Correlation Match:** `cve` on `CVE-2026-109618` (Confidence: 0.90)
+> **Summary:** PoC: CVE-2026-109618 - phpbackports (vperetti/phpbackports)
+
+### Newly Added Campaign Indicators
+
+| Type | Value | First Observed |
+|---|---|---|
+| CVE | `CVE-2026-999999` | 2026-11-23 |
+
+### Detection Notes
+_IOCs recorded in this dossier only._
+"""
+    )
+    stripped = strip_incremental_updates(hunt_with_update)
+    assert "Incremental Threat Intel Update" not in stripped
+    assert "CVE-2026-999999" not in stripped
+
+    facts, report = audit_hunt_text(hunt_with_update)
+    assert facts.hunt_id == "H-0618"
+    unsupported_values = [c.value for c in report.unsupported]
+    assert "CVE-2026-999999" not in unsupported_values
+    assert report.counts["unsupported"] == 0

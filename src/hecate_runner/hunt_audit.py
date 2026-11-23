@@ -36,6 +36,22 @@ _SECTION_PREFIX = "### "
 _GROUNDING_HEADING = "### Grounding"
 _TECHNIQUE_RE = re.compile(r"\bT\d{4}(?:\.\d{3})?\b")
 
+# Correlator always prefixes with a horizontal rule, but older/manual copies may not.
+_INCREMENTAL_UPDATE_RE = re.compile(
+    r"(?:\n---)?\n+## Incremental Threat Intel Update\b.*?(?=\n---\n|\n## Incremental Threat Intel Update\b|\Z)",
+    re.DOTALL,
+)
+
+
+def strip_incremental_updates(text: str) -> str:
+    """Remove living-dossier IOC appendices before claim-grounding audits."""
+    prev = None
+    cleaned = text
+    while prev != cleaned:
+        prev = cleaned
+        cleaned = _INCREMENTAL_UPDATE_RE.sub("\n", cleaned)
+    return cleaned
+
 
 @dataclass
 class HuntFacts:
@@ -231,8 +247,9 @@ def audit_hunt_text(
     the source reported.
     """
     facts = parse_hunt_file(text)
+    clean_draft = strip_incremental_updates(strip_grounding_section(text))
     report = audit_draft(
-        draft_text=strip_grounding_section(text),
+        draft_text=clean_draft,
         cti_text="\n".join(filter(None, (facts.cti_text, facts.primary_source_text))),
         research_text="",
         cti_techniques=facts.cti_techniques,

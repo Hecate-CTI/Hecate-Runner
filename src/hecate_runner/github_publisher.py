@@ -27,7 +27,10 @@ import httpx
 import jwt
 
 from hecate_runner.config import Settings
-from hecate_runner.hunt_audit import parse_hunt_file
+from hecate_runner.hunt_audit import (
+    parse_hunt_file,
+    strip_incremental_updates,
+)
 from hecate_runner.private_data import prepare_directory, protect_file
 from hecate_runner.promotion_policy import _TLP_RE, evaluate_promotion, load_policy
 from hecate_runner.public_review import (
@@ -98,13 +101,6 @@ def _relative_file(workspace: Path, candidate: Path, *, allowed_root: str) -> tu
     return relative, content
 
 
-# Correlator always prefixes with a horizontal rule, but older/manual copies may not.
-_INCREMENTAL_UPDATE_RE = re.compile(
-    r"(?:\n---)?\n+## Incremental Threat Intel Update\b.*?(?=\n---\n|\n## Incremental Threat Intel Update\b|\Z)",
-    re.DOTALL,
-)
-
-
 def public_hunt_text_for_promotion(hunt_text: str) -> str:
     """Strip living-dossier IOC appendices so publish digests track behavioral content.
 
@@ -113,11 +109,7 @@ def public_hunt_text_for_promotion(hunt_text: str) -> str:
     """
     text = hunt_text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"(?m)^last_enriched_at:\s*.*\n", "", text)
-    # Repeat until stable so adjacent blocks and rule separators are fully removed.
-    prev = None
-    while prev != text:
-        prev = text
-        text = _INCREMENTAL_UPDATE_RE.sub("\n", text)
+    text = strip_incremental_updates(text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.rstrip() + ("\n" if text.strip() else "")
 
