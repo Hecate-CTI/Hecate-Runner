@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import signal
 import sys
@@ -153,21 +154,40 @@ def daemon(
         console.print("[bold green]Hecate daemon shut down gracefully after 0 cycles.[/bold green]")
         raise typer.Exit(code=0)
 
+    retained_cti = None
+    try:
+        from hecate_runner.cti import get_provider
+
+        retained_cti = get_provider(settings.cti_provider, settings=settings)
+    except Exception as exc:
+        log.warning(
+            "Could not pre-initialize retained CTI provider (%s); orchestrator will construct per cycle",
+            exc,
+        )
+
     try:
         while not stop_event.is_set():
             start_health_refresh(settings)
+            kwargs: dict[str, Any] = {}
             if force:
-                orch = build_default_orch(settings, ignore_quota=True)
-            else:
-                orch = build_default_orch(settings)
+                kwargs["ignore_quota"] = True
+            if retained_cti is not None:
+                kwargs["cti_provider"] = retained_cti
+
+            try:
+                orch = build_default_orch(settings, **kwargs)
+            except TypeError:
+                kwargs.pop("cti_provider", None)
+                orch = build_default_orch(settings, **kwargs)
 
             log.info("Daemon executing cycle #%d...", cycles_completed + 1)
             try:
                 result = orch.run_once(dry_run=dry_run)
             finally:
-                provider = getattr(orch, "cti", None)
-                if provider is not None:
-                    provider.close()
+                if retained_cti is None:
+                    provider = getattr(orch, "cti", None)
+                    if provider is not None:
+                        provider.close()
             _print_result(result)
             cycles_completed += 1
 
@@ -281,6 +301,10 @@ def daemon(
         log.error("Fatal daemon error: %s", exc, exc_info=True)
         console.print(f"[bold red]Fatal daemon exception:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
+    finally:
+        if retained_cti is not None:
+            with contextlib.suppress(Exception):
+                retained_cti.close()
 
     console.print(
         f"[bold green]Hecate daemon shut down gracefully after {cycles_completed} cycles.[/bold green]"

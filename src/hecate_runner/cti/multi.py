@@ -92,6 +92,7 @@ class MultiProvider(CTIProvider):
         priority_tiers: bool = False,
         *,
         empty_ttl_sec: float = DEFAULT_EMPTY_TTL_SEC,
+        cooldown_file: Path | None = None,
     ):
         if not providers:
             raise MultiProviderError(
@@ -104,11 +105,14 @@ class MultiProvider(CTIProvider):
             )
         self.providers = providers
         self.cursor_file = cursor_file
+        self.cooldown_file = cooldown_file or (
+            cursor_file.parent / f"{cursor_file.name}.cooldowns.json"
+        )
         self.priority_tiers = priority_tiers
         self.empty_ttl_sec = max(0.0, float(empty_ttl_sec))
         self._by_name = {p.name: p for p in providers}
-        #: Monotonic deadline until which a provider may be skipped after empty.
-        self._empty_until: dict[str, float] = {}
+        #: Deadline until which a provider may be skipped after empty.
+        self._empty_until: dict[str, float] = self._load_cooldowns()
 
     # --- CTIProvider interface -----------------------------------------------
 
@@ -116,22 +120,55 @@ class MultiProvider(CTIProvider):
         for provider in self.providers:
             provider.close()
 
+    def _load_cooldowns(self) -> dict[str, float]:
+        if not self.cooldown_file.exists():
+            return {}
+        try:
+            data = json.loads(self.cooldown_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                now = time.time()
+                return {
+                    str(k): float(v)
+                    for k, v in data.items()
+                    if isinstance(v, (int, float)) and float(v) > now
+                }
+            return {}
+        except Exception as exc:
+            log.warning(
+                "Multi CTI cooldown file %s unreadable (%s); starting fresh",
+                self.cooldown_file,
+                exc,
+            )
+            return {}
+
+    def _save_cooldowns(self) -> None:
+        try:
+            self.cooldown_file.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(self.cooldown_file, json.dumps(self._empty_until, indent=2))
+        except Exception as exc:
+            log.warning("Failed to save Multi CTI cooldown file %s: %s", self.cooldown_file, exc)
+
     def _is_cooling_down(self, name: str, *, now: float) -> bool:
         until = self._empty_until.get(name)
         return until is not None and now < until
 
     def _mark_empty(self, name: str, *, now: float) -> None:
         if self.empty_ttl_sec <= 0:
-            self._empty_until.pop(name, None)
+            if name in self._empty_until:
+                self._empty_until.pop(name, None)
+                self._save_cooldowns()
             return
         self._empty_until[name] = now + self.empty_ttl_sec
+        self._save_cooldowns()
 
     def _clear_empty(self, name: str) -> None:
-        self._empty_until.pop(name, None)
+        if name in self._empty_until:
+            self._empty_until.pop(name, None)
+            self._save_cooldowns()
 
     def next_item(self) -> CTIItem | None:
         cursor = MultiCursorState.load(self.cursor_file)
-        now = time.monotonic()
+        now = time.time()
 
         if self.priority_tiers:
             # Priority tiers ensure high-signal KEV & PoCs are evaluated before general feeds

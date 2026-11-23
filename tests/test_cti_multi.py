@@ -325,3 +325,34 @@ def test_tiered_priority_picks_tier_1_before_tier_3(tmp_path: Path) -> None:
     )
     picked = provider.next_item()
     assert picked is not None and picked.source == "cisa_kev"
+
+
+def test_cooldowns_persist_across_recreated_providers(tmp_path: Path) -> None:
+    empty = _FakeProvider("misp", [])
+    rss = _FakeProvider("rss", [_item("rss", "rss-1")])
+    cursor_file = tmp_path / "cursor.json"
+    cooldown_file = tmp_path / "cursor.json.cooldowns.json"
+
+    p1 = MultiProvider(
+        providers=[empty, rss],
+        cursor_file=cursor_file,
+        empty_ttl_sec=300.0,
+    )
+    item = p1.next_item()
+    assert item is not None and item.content == "rss-1"
+    assert "misp" in p1._empty_until
+    assert cooldown_file.exists()
+
+    # Recreate provider as a new cycle would do
+    empty2 = _FakeProvider("misp", [_item("misp", "should-not-see-due-to-cooldown")])
+    rss2 = _FakeProvider("rss", [_item("rss", "rss-2")])
+    p2 = MultiProvider(
+        providers=[empty2, rss2],
+        cursor_file=cursor_file,
+        empty_ttl_sec=300.0,
+    )
+    assert "misp" in p2._empty_until
+
+    item2 = p2.next_item()
+    # misp is still cooling down from p1's cycle, so rss-2 is picked!
+    assert item2 is not None and item2.content == "rss-2"

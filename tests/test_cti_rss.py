@@ -545,3 +545,47 @@ def test_concurrent_feed_fetching(tmp_path: Path) -> None:
     # 4 feeds with 0.05s delay each:
     # Serially: >= 0.20s. Concurrently: < 0.15s
     assert elapsed < 0.18
+
+
+def test_consuming_buffered_items_does_not_refetch_feeds(tmp_path: Path) -> None:
+    feed_urls = [f"https://feed-{i}.example.com/rss/" for i in range(5)]
+    requests_made: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_made.append(str(request.url))
+        url = str(request.url)
+        idx = feed_urls.index(url)
+        # Feed 0 has 4 entries; others have 0
+        if idx == 0:
+            entries = [
+                _entry(
+                    title=f"Article {j}",
+                    link=f"https://feed-0.example.com/item-{j}",
+                    pub_date=_days_ago(5 - j),
+                )
+                for j in range(4)
+            ]
+        else:
+            entries = []
+        return httpx.Response(
+            200, text=_rss_xml(entries), headers={"content-type": "application/rss+xml"}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = RssProvider(
+        feed_urls=feed_urls,
+        cursor_file=tmp_path / "cursor.json",
+        client=client,
+    )
+
+    items = []
+    for _ in range(4):
+        item = provider.next_item()
+        assert item is not None
+        provider.acknowledge(item)
+        items.append(item)
+
+    assert len(items) == 4
+    # All 4 items were consumed from the buffer populated in the single initial refresh!
+    # 5 feeds were fetched exactly once (5 total requests), NOT 4 * 5 = 20 requests!
+    assert len(requests_made) == 5

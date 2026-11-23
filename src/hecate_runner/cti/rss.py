@@ -61,6 +61,7 @@ import json
 import logging
 import re
 import threading
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -159,6 +160,7 @@ class RssHttpCacheEntry:
     etag: str | None = None
     last_modified: str | None = None
     content: str = ""
+    entries: list[dict[str, Any]] | None = None
 
 
 class RssProvider(CTIProvider):
@@ -187,6 +189,9 @@ class RssProvider(CTIProvider):
         self._cache_lock = threading.Lock()
         self._http_cache: dict[str, RssHttpCacheEntry] = self._load_http_cache()
         self._dirty_cache: bool = False
+        self._candidate_buffer: list[tuple[str, dict[str, Any]]] = []
+        self._refresh_lock = threading.RLock()
+        self._last_refresh_time: float = 0.0
         self._client = client or httpx.Client(
             timeout=request_timeout_sec,
             headers={"User-Agent": REQUEST_USER_AGENT},
@@ -237,64 +242,80 @@ class RssProvider(CTIProvider):
 
     # --- CTIProvider interface -----------------------------------------------
 
+    def refresh_feeds(self, force: bool = False) -> int:
+        """Fetch all configured feeds and buffer unrouted candidate entries.
+
+        Returns the number of candidates discovered.
+        """
+        with self._refresh_lock:
+            cursor = RssCursorState.load(self.cursor_file)
+            cutoff = datetime.now(UTC) - timedelta(days=self.max_entry_age_days)
+
+            def _fetch_safely(feed_url: str) -> tuple[str, list[dict[str, Any]] | None, str | None]:
+                try:
+                    entries = self._fetch_entries(feed_url)
+                    return feed_url, entries, None
+                except RssError as exc:
+                    return feed_url, None, str(exc)
+
+            # Concurrently fetch feeds
+            workers = min(len(self.feed_urls), self.max_workers)
+            if len(self.feed_urls) <= 1:
+                results = [_fetch_safely(url) for url in self.feed_urls]
+            else:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                    results = list(executor.map(_fetch_safely, self.feed_urls))
+
+            with self._cache_lock:
+                if self._dirty_cache:
+                    self._save_http_cache()
+                    self._dirty_cache = False
+
+            candidates: list[tuple[str, dict[str, Any]]] = []
+            for feed_url, entries, error in results:
+                if error is not None or entries is None:
+                    log.warning("Skipping feed %s (%s)", feed_url, error)
+                    continue
+
+                for entry in entries:
+                    identifiers = _entry_identifiers(entry)
+                    if not identifiers or cursor.already_routed_any(feed_url, identifiers):
+                        continue
+                    published = _entry_published(entry)
+                    if published is not None and published < cutoff:
+                        continue
+                    candidates.append((feed_url, entry))
+
+            # Oldest unrouted candidate first, mirroring OtxProvider — a stable,
+            # fair ordering across feeds rather than always favoring whichever
+            # feed happens to be checked first.
+            candidates.sort(
+                key=lambda pair: _entry_published(pair[1]) or datetime.max.replace(tzinfo=UTC)
+            )
+            self._candidate_buffer = candidates
+            self._last_refresh_time = time.time()
+            return len(candidates)
+
     def next_item(self) -> CTIItem | None:
         cursor = RssCursorState.load(self.cursor_file)
         cutoff = datetime.now(UTC) - timedelta(days=self.max_entry_age_days)
 
-        candidates: list[tuple[str, dict[str, Any]]] = []
+        with self._refresh_lock:
+            if not self._candidate_buffer:
+                self.refresh_feeds()
 
-        def _fetch_safely(feed_url: str) -> tuple[str, list[dict[str, Any]] | None, str | None]:
-            try:
-                entries = self._fetch_entries(feed_url)
-                return feed_url, entries, None
-            except RssError as exc:
-                return feed_url, None, str(exc)
-
-        # Concurrently fetch feeds
-        workers = min(len(self.feed_urls), self.max_workers)
-        if len(self.feed_urls) <= 1:
-            results = [_fetch_safely(url) for url in self.feed_urls]
-        else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-                results = list(executor.map(_fetch_safely, self.feed_urls))
-
-        with self._cache_lock:
-            if self._dirty_cache:
-                self._save_http_cache()
-                self._dirty_cache = False
-
-        for feed_url, entries, error in results:
-            if error is not None or entries is None:
-                log.warning("Skipping feed %s (%s)", feed_url, error)
-                continue
-
-            for entry in entries:
+            while self._candidate_buffer:
+                feed_url, entry = self._candidate_buffer.pop(0)
                 identifiers = _entry_identifiers(entry)
                 if not identifiers or cursor.already_routed_any(feed_url, identifiers):
                     continue
                 published = _entry_published(entry)
                 if published is not None and published < cutoff:
                     continue
-                candidates.append((feed_url, entry))
+                return _entry_to_cti_item(feed_url, entry)
 
-        if not candidates:
-            log.debug("No new entries across %d configured RSS feeds", len(self.feed_urls))
-            return None
-
-        # Oldest unrouted candidate first, mirroring OtxProvider — a stable,
-        # fair ordering across feeds rather than always favoring whichever
-        # feed happens to be checked first. An entry whose date we couldn't
-        # parse at all sorts as *newest* (lowest priority), not oldest: an
-        # unverifiable age has no business jumping ahead of entries we know
-        # for certain are older. (This used to fall back to datetime.min --
-        # oldest-possible -- which let entries with unparseable dates, e.g.
-        # a feed emitting a non-RFC822 format, win "oldest" against every
-        # other feed indefinitely, regardless of their actual age.)
-        candidates.sort(
-            key=lambda pair: _entry_published(pair[1]) or datetime.max.replace(tzinfo=UTC)
-        )
-        feed_url, entry = candidates[0]
-        return _entry_to_cti_item(feed_url, entry)
+        log.debug("No new entries across %d configured RSS feeds", len(self.feed_urls))
+        return None
 
     def acknowledge(self, item: CTIItem) -> None:
         feed_url = item.metadata.get("feed_url")
@@ -328,9 +349,14 @@ class RssProvider(CTIProvider):
             raise RssError(f"request failed: {exc}") from exc
 
         if resp.status_code == 304:
+            if cached and cached.entries is not None:
+                return list(cached.entries)
             if cached and cached.content:
                 parsed = feedparser.parse(cached.content)
-                return list(parsed.entries)
+                parsed_entries = list(parsed.entries)
+                with self._cache_lock:
+                    cached.entries = parsed_entries
+                return parsed_entries
             try:
                 resp = self._client.get(feed_url)
             except httpx.RequestError as exc:
@@ -343,6 +369,7 @@ class RssProvider(CTIProvider):
         if parsed.bozo and not parsed.entries:
             raise RssError(f"unparseable feed: {parsed.get('bozo_exception', 'unknown error')}")
 
+        parsed_entries = list(parsed.entries)
         etag = resp.headers.get("etag")
         last_modified = resp.headers.get("last-modified")
         if etag or last_modified:
@@ -351,10 +378,11 @@ class RssProvider(CTIProvider):
                     etag=etag,
                     last_modified=last_modified,
                     content=resp.text,
+                    entries=parsed_entries,
                 )
                 self._dirty_cache = True
 
-        return list(parsed.entries)
+        return parsed_entries
 
 
 def _entry_id(entry: dict[str, Any]) -> str:
