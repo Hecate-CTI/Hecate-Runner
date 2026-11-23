@@ -702,37 +702,39 @@ class OrchestratorRulesMixin:
         out_dir: Path,
     ) -> list[dict[str, Any]]:
         """Deploy or simulate deployment of transpiled queries to target SIEM/EDR platforms."""
-        from hecate_agent.api import deploy_transpiled_query
+        from hecate_agent.api import deploy_transpiled_query, get_query_deployer
 
         deploy_results = []
         is_dry_run = getattr(self.settings, "siem_deploy_dry_run", True)
 
-        for rule in rules:
-            r_yaml = rule.get("rule_yaml")
-            title = str(rule.get("title") or req.hunt_id)
-            if not r_yaml:
-                continue
+        with get_query_deployer() as deployer:
+            for rule in rules:
+                r_yaml = rule.get("rule_yaml")
+                title = str(rule.get("title") or req.hunt_id)
+                if not r_yaml:
+                    continue
 
-            try:
-                trans_queries = rule.get("_transpile")
-                if not isinstance(trans_queries, dict):
-                    from hecate_agent.api import transpile_sigma_rule
+                try:
+                    trans_queries = rule.get("_transpile")
+                    if not isinstance(trans_queries, dict):
+                        from hecate_agent.api import transpile_sigma_rule
 
-                    trans_queries = transpile_sigma_rule(r_yaml)
-                for target, t_res in trans_queries.items():
-                    if getattr(t_res, "success", False) and getattr(t_res, "query", None):
-                        res = deploy_transpiled_query(
-                            target=target,
-                            query=t_res.query,
-                            hunt_id=req.hunt_id,
-                            title=title,
-                            description=f"Auto-generated query for {req.hunt_id}",
-                            techniques=rule.get("techniques") or [],
-                            dry_run=is_dry_run,
-                        )
-                        deploy_results.append(res)
-            except Exception as d_err:
-                log.warning("Query deployment skipped for %s (%s)", title, d_err)
+                        trans_queries = transpile_sigma_rule(r_yaml)
+                    for target, t_res in trans_queries.items():
+                        if getattr(t_res, "success", False) and getattr(t_res, "query", None):
+                            res = deploy_transpiled_query(
+                                target=target,
+                                query=t_res.query,
+                                hunt_id=req.hunt_id,
+                                title=title,
+                                description=f"Auto-generated query for {req.hunt_id}",
+                                techniques=rule.get("techniques") or [],
+                                dry_run=is_dry_run,
+                                deployer=deployer,
+                            )
+                            deploy_results.append(res)
+                except Exception as d_err:
+                    log.warning("Query deployment skipped for %s (%s)", title, d_err)
 
         if deploy_results:
             statuses = [f"{r.get('target')}:{r.get('status')}" for r in deploy_results]

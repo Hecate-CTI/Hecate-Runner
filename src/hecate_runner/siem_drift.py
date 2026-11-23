@@ -319,7 +319,11 @@ def reconcile_hunt_queries(
     Returns:
         List of reconciliation outcomes for each query.
     """
-    from hecate_agent.api import deploy_transpiled_query, sync_transpiled_query
+    from hecate_agent.api import (
+        deploy_transpiled_query,
+        get_query_deployer,
+        sync_transpiled_query,
+    )
 
     query_dir = query_directory(workspace, hunt_id)
     if not query_dir.exists():
@@ -347,74 +351,77 @@ def reconcile_hunt_queries(
 
     reconciliation_results: list[dict[str, Any]] = []
 
-    for q_file in sorted(query_dir.iterdir()):
-        tgt = query_exts.get(q_file.suffix.lower())
-        if not tgt:
-            continue
-        if target and target.lower() != tgt.lower():
-            continue
+    with get_query_deployer() as deployer:
+        for q_file in sorted(query_dir.iterdir()):
+            tgt = query_exts.get(q_file.suffix.lower())
+            if not tgt:
+                continue
+            if target and target.lower() != tgt.lower():
+                continue
 
-        key = f"{q_file.name}:{tgt}"
-        current = sync_map.get(key)
-        prev_status = current.get("status") if current else "unknown"
+            key = f"{q_file.name}:{tgt}"
+            current = sync_map.get(key)
+            prev_status = current.get("status") if current else "unknown"
 
-        # Only reconcile if drifted, missing, or force is requested
-        if not force and prev_status in {"in_sync", "dry_run", "decommissioned"}:
-            continue
+            # Only reconcile if drifted, missing, or force is requested
+            if not force and prev_status in {"in_sync", "dry_run", "decommissioned"}:
+                continue
 
-        q_text = read_artifact(q_file, workspace).strip()
-        title = q_file.stem.replace("__", " - ").replace("_", " ").title()
+            q_text = read_artifact(q_file, workspace).strip()
+            title = q_file.stem.replace("__", " - ").replace("_", " ").title()
 
-        # Deploy git-authoritative query
-        deploy_res = deploy_transpiled_query(
-            target=tgt,
-            query=q_text,
-            hunt_id=hunt_id,
-            title=title,
-            dry_run=dry_run,
-        )
-
-        remote_id = deploy_res.get("remote_id")
-        post_status = "in_sync" if dry_run else "reconciled"
-        detail = deploy_res.get("detail", "")
-        ok = deploy_res.get("ok", False)
-
-        if not dry_run and ok:
-            # Re-verify sync status live
-            sync_check = sync_transpiled_query(
+            # Deploy git-authoritative query
+            deploy_res = deploy_transpiled_query(
                 target=tgt,
                 query=q_text,
                 hunt_id=hunt_id,
                 title=title,
-                dry_run=False,
+                dry_run=dry_run,
+                deployer=deployer,
             )
-            post_status = sync_check.get("status", "in_sync")
-            if sync_check.get("ok"):
-                detail = f"Successfully reconciled and verified in sync with {tgt}"
 
-        rec_outcome = {
-            "file": q_file.name,
-            "target": tgt,
-            "remote_id": remote_id,
-            "previous_status": prev_status,
-            "status": post_status,
-            "ok": ok and (post_status in {"in_sync", "dry_run", "reconciled"}),
-            "detail": detail,
-            "request_summary": deploy_res.get("request_summary", {}),
-        }
-        reconciliation_results.append(rec_outcome)
+            remote_id = deploy_res.get("remote_id")
+            post_status = "in_sync" if dry_run else "reconciled"
+            detail = deploy_res.get("detail", "")
+            ok = deploy_res.get("ok", False)
 
-        if not dry_run:
-            try:
-                record_reconciliation_event(
-                    workspace=workspace,
+            if not dry_run and ok:
+                # Re-verify sync status live
+                sync_check = sync_transpiled_query(
+                    target=tgt,
+                    query=q_text,
                     hunt_id=hunt_id,
-                    rec_result=rec_outcome,
-                    query_content=q_text,
-                    actor=actor,
+                    title=title,
+                    dry_run=False,
+                    deployer=deployer,
                 )
-            except Exception as exc:
-                log.warning("Could not record reconciliation event in SQLite: %s", exc)
+                post_status = sync_check.get("status", "in_sync")
+                if sync_check.get("ok"):
+                    detail = f"Successfully reconciled and verified in sync with {tgt}"
+
+            rec_outcome = {
+                "file": q_file.name,
+                "target": tgt,
+                "remote_id": remote_id,
+                "previous_status": prev_status,
+                "status": post_status,
+                "ok": ok and (post_status in {"in_sync", "dry_run", "reconciled"}),
+                "detail": detail,
+                "request_summary": deploy_res.get("request_summary", {}),
+            }
+            reconciliation_results.append(rec_outcome)
+
+            if not dry_run:
+                try:
+                    record_reconciliation_event(
+                        workspace=workspace,
+                        hunt_id=hunt_id,
+                        rec_result=rec_outcome,
+                        query_content=q_text,
+                        actor=actor,
+                    )
+                except Exception as exc:
+                    log.warning("Could not record reconciliation event in SQLite: %s", exc)
 
     return reconciliation_results
 

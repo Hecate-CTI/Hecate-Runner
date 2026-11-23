@@ -1077,3 +1077,57 @@ def test_undeploy_without_retire_keeps_versions_active_and_surfaces_missing(
     report = audit_workspace_queries(mock_workspace, dry_run=False, force=True)
     assert report["missing_count"] >= 1
     assert "H-0007" in report.get("missing_by_hunt", {})
+
+
+def test_reconcile_hunt_queries_deployer_reuse(
+    mock_workspace: Path, monkeypatch: pytest.MonkeyPatch
+):
+    class FakeDeployer:
+        def __init__(self):
+            self.entered = 0
+            self.exited = 0
+
+        def __enter__(self):
+            self.entered += 1
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            self.exited += 1
+
+    fake_deployer = FakeDeployer()
+    monkeypatch.setattr("hecate_agent.api.get_query_deployer", lambda: fake_deployer)
+
+    deploy_calls = []
+    sync_calls = []
+
+    monkeypatch.setattr(
+        "hecate_agent.api.deploy_transpiled_query",
+        lambda **kwargs: (
+            deploy_calls.append(kwargs) or {"ok": True, "status": "deployed", "remote_id": "r1"}
+        ),
+    )
+    monkeypatch.setattr(
+        "hecate_agent.api.sync_transpiled_query",
+        lambda **kwargs: sync_calls.append(kwargs) or {"ok": True, "status": "in_sync"},
+    )
+    monkeypatch.setattr(
+        "hecate_runner.siem_drift.sync_queries_for_hunt",
+        lambda *args, **kwargs: [
+            {"file": "process__chmod.spl", "target": "splunk_spl", "status": "drifted", "ok": False}
+        ],
+    )
+    monkeypatch.setattr(
+        "hecate_runner.siem_drift.get_hunt_lifecycle",
+        lambda workspace, hunt_id: {"status": "active", "is_retired": False, "path": None},
+    )
+
+    results = reconcile_hunt_queries(
+        mock_workspace, "H-0007", target="splunk_spl", dry_run=False, force=True
+    )
+    assert len(results) == 1
+    assert len(deploy_calls) == 1
+    assert deploy_calls[0].get("deployer") is fake_deployer
+    assert len(sync_calls) == 1
+    assert sync_calls[0].get("deployer") is fake_deployer
+    assert fake_deployer.entered == 1
+    assert fake_deployer.exited == 1

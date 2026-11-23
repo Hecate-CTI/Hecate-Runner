@@ -276,3 +276,69 @@ def test_slack_bot_unconfigured_safety():
     # Calling start should log warning and return cleanly without crashing
     service.start()
     service.close()
+
+
+def test_query_actions_deployer_reuse(tmp_path: Path, monkeypatch):
+    from hecate_runner.slack_bot import sync_queries_for_hunt, undeploy_queries_for_hunt
+
+    workspace = tmp_path / "workspace"
+    q_dir = workspace / "queries" / "H-0105"
+    q_dir.mkdir(parents=True)
+    (q_dir / "test1.spl").write_text("index=main error", encoding="utf-8")
+    (q_dir / "test2.kql").write_text("SecurityEvent | take 10", encoding="utf-8")
+
+    class FakeDeployer:
+        def __init__(self):
+            self.entered = 0
+            self.exited = 0
+
+        def __enter__(self):
+            self.entered += 1
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            self.exited += 1
+
+    fake_deployer = FakeDeployer()
+    monkeypatch.setattr("hecate_agent.api.get_query_deployer", lambda: fake_deployer)
+
+    deploy_calls = []
+    undeploy_calls = []
+    sync_calls = []
+
+    monkeypatch.setattr(
+        "hecate_agent.api.deploy_transpiled_query",
+        lambda **kwargs: deploy_calls.append(kwargs) or {"ok": True, "status": "dry_run"},
+    )
+    monkeypatch.setattr(
+        "hecate_agent.api.undeploy_transpiled_query",
+        lambda **kwargs: undeploy_calls.append(kwargs) or {"ok": True, "status": "dry_run"},
+    )
+    monkeypatch.setattr(
+        "hecate_agent.api.sync_transpiled_query",
+        lambda **kwargs: sync_calls.append(kwargs) or {"ok": True, "status": "in_sync"},
+    )
+
+    # 1. deploy_queries_for_hunt
+    deploy_results = deploy_queries_for_hunt(workspace, "H-0105")
+    assert len(deploy_results) == 2
+    assert len(deploy_calls) == 2
+    assert all(c.get("deployer") is fake_deployer for c in deploy_calls)
+    assert fake_deployer.entered == 1
+    assert fake_deployer.exited == 1
+
+    # 2. undeploy_queries_for_hunt
+    undeploy_results = undeploy_queries_for_hunt(workspace, "H-0105")
+    assert len(undeploy_results) == 2
+    assert len(undeploy_calls) == 2
+    assert all(c.get("deployer") is fake_deployer for c in undeploy_calls)
+    assert fake_deployer.entered == 2
+    assert fake_deployer.exited == 2
+
+    # 3. sync_queries_for_hunt
+    sync_results = sync_queries_for_hunt(workspace, "H-0105")
+    assert len(sync_results) == 2
+    assert len(sync_calls) == 2
+    assert all(c.get("deployer") is fake_deployer for c in sync_calls)
+    assert fake_deployer.entered == 3
+    assert fake_deployer.exited == 3
