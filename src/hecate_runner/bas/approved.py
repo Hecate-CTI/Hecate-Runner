@@ -512,7 +512,7 @@ def explain_approved_selection(
     if not approved_hits:
         return (
             "No hunt techniques are both allowlisted and in the approved procedure catalog "
-            f"(techniques={techniques!r}, allowlist={sorted(allowed_set)!r})."
+            f"(techniques={techniques!r}, allowlist_count={len(allowed_set)})."
         )
 
     linux_rules = 0

@@ -493,6 +493,27 @@ def record_hunt_execution(
             f"- **Detail:** {detail}\n"
         )
 
+    if triage_report is not None and matched_count > 0:
+        summary_txt = getattr(triage_report, "summary", "").replace("\n", " ").strip()
+        if len(summary_txt) > 100:
+            summary_txt = summary_txt[:97] + "..."
+        finding_row = (
+            f"| Finding ({now_iso[:10]}) | SIEM:{target} | {summary_txt or 'Matched activity'} |"
+        )
+        body = body.replace("| N/A | N/A | Draft only |", finding_row)
+        if "true_positives" in fm:
+            body = re.sub(
+                r"\*\*True Positives:\*\*\s*\d+",
+                f"**True Positives:** {fm['true_positives']}",
+                body,
+            )
+        if "false_positives" in fm:
+            body = re.sub(
+                r"\*\*False Positives:\*\*\s*\d+",
+                f"**False Positives:** {fm['false_positives']}",
+                body,
+            )
+
     new_content = f"---\n{new_yaml}---\n{body.rstrip()}\n{exec_entry}"
     write_artifact(hunt_path, new_content, workspace)
 
