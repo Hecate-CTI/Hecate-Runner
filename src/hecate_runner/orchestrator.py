@@ -1481,7 +1481,11 @@ class Orchestrator(
 # --- Factory ---------------------------------------------------------------
 
 
-def build_default_orchestrator(settings: Settings, ignore_quota: bool = False) -> Orchestrator:
+def build_default_orchestrator(
+    settings: Settings,
+    ignore_quota: bool = False,
+    cti_provider: CTIProvider | None = None,
+) -> Orchestrator:
     """Wire up the standard orchestrator from settings alone."""
     if ignore_quota:
         settings = settings.model_copy(
@@ -1493,9 +1497,10 @@ def build_default_orchestrator(settings: Settings, ignore_quota: bool = False) -
         env_overrides=settings.env_for_hecate(),
         default_timeout_sec=settings.llm_timeout_sec,
     )
-    cti = get_provider(settings.cti_provider, settings=settings)
+    if cti_provider is None:
+        cti_provider = get_provider(settings.cti_provider, settings=settings)
     notify = functools.partial(notify_draft_created, settings)
-    return Orchestrator(settings=settings, hecate=hecate, cti_provider=cti, notify=notify)
+    return Orchestrator(settings=settings, hecate=hecate, cti_provider=cti_provider, notify=notify)
 
 
 def build_orchestrator_for_item(
