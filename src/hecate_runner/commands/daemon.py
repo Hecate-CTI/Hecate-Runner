@@ -8,6 +8,7 @@ import signal
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Annotated, Any, cast
 
 import typer
@@ -17,6 +18,7 @@ from rich.panel import Panel
 
 from hecate_runner.config import Settings
 from hecate_runner.orchestrator import RunResult
+from hecate_runner.work_locks import acquire_work_lock
 
 log = logging.getLogger(__name__)
 console = Console()
@@ -58,6 +60,81 @@ def _print_result(result: RunResult) -> None:
         console.print(f"[bold]Research ID:[/bold] {result.research_id}")
     if result.draft_path:
         console.print(f"[bold]Draft path:[/bold] {result.draft_path}")
+
+
+_SWEEP_JOB_LOCK = threading.Lock()
+_REPLAY_JOB_LOCK = threading.Lock()
+
+
+def _execute_sweep_job(settings: Settings, console: Console | None = None) -> Any:
+    """Execute scheduled hunt sweeps bounded by in-process and workspace locks."""
+    if not _SWEEP_JOB_LOCK.acquire(blocking=False):
+        log.debug("Scheduled sweep job already running in process; skipping tick.")
+        return None
+    try:
+        workspace = Path(settings.hecate_workspace)
+        lock_path = workspace / ".hecate" / "sweeps.lock"
+        file_lock = acquire_work_lock(lock_path)
+        if file_lock is None:
+            log.debug("Another worker is executing hunt sweeps; skipping tick.")
+            return None
+        try:
+            log.info("Daemon executing scheduled hunt sweep check...")
+            from hecate_runner.execution.scheduler import HuntExecutionScheduler
+
+            sched = HuntExecutionScheduler(settings=settings)
+            sweep_res = sched.run_scheduled_sweeps()
+            if sweep_res and console is not None:
+                console.print(
+                    f"[bold cyan]🎯 Daemon processed {len(sweep_res)} hunt sweeps.[/bold cyan]"
+                )
+            return sweep_res
+        except Exception as sweep_err:
+            log.error("Daemon hunt sweep error: %s", sweep_err, exc_info=True)
+            return None
+        finally:
+            with contextlib.suppress(Exception):
+                file_lock.close()
+    finally:
+        _SWEEP_JOB_LOCK.release()
+
+
+def _execute_replay_job(settings: Settings, console: Console | None = None) -> Any:
+    """Execute continuous Purple Team replay bounded by in-process and workspace locks."""
+    if not _REPLAY_JOB_LOCK.acquire(blocking=False):
+        log.debug("Continuous replay job already running in process; skipping tick.")
+        return None
+    try:
+        workspace = Path(settings.hecate_workspace)
+        lock_path = workspace / ".hecate" / "replay.lock"
+        file_lock = acquire_work_lock(lock_path)
+        if file_lock is None:
+            log.debug("Another worker is executing continuous replay; skipping tick.")
+            return None
+        try:
+            log.info(
+                "Daemon executing continuous Purple Team replay verification across active hunts..."
+            )
+            from hecate_runner.purple_team import run_continuous_replay_sweep
+
+            sweep_outcomes = run_continuous_replay_sweep(settings)
+            if sweep_outcomes and console is not None:
+                missed = sum(
+                    1 for o in sweep_outcomes if o.get("passed_rules", 0) < o.get("total_rules", 0)
+                )
+                console.print(
+                    f"[bold magenta]🛡️ Daemon completed Purple Team continuous replay across "
+                    f"{len(sweep_outcomes)} hunts ({missed} with tuning suggestions generated).[/bold magenta]"
+                )
+            return sweep_outcomes
+        except Exception as pt_err:
+            log.error("Daemon Purple Team continuous replay error: %s", pt_err, exc_info=True)
+            return None
+        finally:
+            with contextlib.suppress(Exception):
+                file_lock.close()
+    finally:
+        _REPLAY_JOB_LOCK.release()
 
 
 def daemon(
@@ -112,9 +189,7 @@ def daemon(
         console.print(f"[bold red]Invalid --max-cycles:[/bold red] {max_cycles!r} (must be >= 0).")
         raise typer.Exit(code=1)
     stop_event = threading.Event()
-    last_sweep_check: float = 0.0
     sweep_interval_sec = float(settings.auto_hunt_sweep_interval_sec)
-    last_replay_check: float = 0.0
     replay_interval_sec = float(settings.purple_team_continuous_replay_interval_sec)
 
     def _sig_handler(signum: int, frame: Any) -> None:
@@ -165,6 +240,60 @@ def daemon(
             exc,
         )
 
+    worker_threads: list[threading.Thread] = []
+
+    if sweeps and settings.auto_hunt_execution_enabled and not dry_run:
+        sweep_ready = threading.Event()
+
+        def _sweep_worker_runner() -> None:
+            try:
+                _execute_sweep_job(settings, console)
+            finally:
+                sweep_ready.set()
+            while not stop_event.is_set():
+                sleep_until = time.time() + sweep_interval_sec
+                while time.time() < sleep_until and not stop_event.is_set():
+                    time.sleep(min(0.05, max(0.005, sleep_until - time.time())))
+                if not stop_event.is_set():
+                    _execute_sweep_job(settings, console)
+
+        t_sweep = threading.Thread(
+            target=_sweep_worker_runner,
+            name="hecate-daemon-sweep-worker",
+            daemon=True,
+        )
+        worker_threads.append(t_sweep)
+        t_sweep.start()
+        start_wait = time.time()
+        while not sweep_ready.is_set() and (time.time() - start_wait) < 1.0:
+            time.sleep(0.01)
+
+    if replay_interval_sec > 0 and not dry_run:
+        replay_ready = threading.Event()
+
+        def _replay_worker_runner() -> None:
+            try:
+                _execute_replay_job(settings, console)
+            finally:
+                replay_ready.set()
+            while not stop_event.is_set():
+                sleep_until = time.time() + replay_interval_sec
+                while time.time() < sleep_until and not stop_event.is_set():
+                    time.sleep(min(0.05, max(0.005, sleep_until - time.time())))
+                if not stop_event.is_set():
+                    _execute_replay_job(settings, console)
+
+        t_replay = threading.Thread(
+            target=_replay_worker_runner,
+            name="hecate-daemon-replay-worker",
+            daemon=True,
+        )
+        worker_threads.append(t_replay)
+        t_replay.start()
+        start_wait = time.time()
+        while not replay_ready.is_set() and (time.time() - start_wait) < 1.0:
+            time.sleep(0.01)
+
     try:
         while not stop_event.is_set():
             start_health_refresh(settings)
@@ -190,53 +319,6 @@ def daemon(
                         provider.close()
             _print_result(result)
             cycles_completed += 1
-
-            # Run periodic autonomous hunt sweep check
-            if sweeps and settings.auto_hunt_execution_enabled and not dry_run:
-                now_ts = time.time()
-                if (now_ts - last_sweep_check) >= sweep_interval_sec:
-                    log.info("Daemon executing scheduled hunt sweep check...")
-                    try:
-                        from hecate_runner.execution.scheduler import HuntExecutionScheduler
-
-                        sched = HuntExecutionScheduler(settings=settings)
-                        sweep_res = sched.run_scheduled_sweeps()
-                        if sweep_res:
-                            console.print(
-                                f"[bold cyan]🎯 Daemon processed {len(sweep_res)} hunt sweeps.[/bold cyan]"
-                            )
-                    except Exception as sweep_err:
-                        log.error("Daemon hunt sweep error: %s", sweep_err, exc_info=True)
-                    finally:
-                        last_sweep_check = now_ts
-
-            # Run periodic continuous Purple Team replay verification
-            if replay_interval_sec > 0 and not dry_run:
-                now_ts = time.time()
-                if (now_ts - last_replay_check) >= replay_interval_sec:
-                    log.info(
-                        "Daemon executing continuous Purple Team replay verification across active hunts..."
-                    )
-                    try:
-                        from hecate_runner.purple_team import run_continuous_replay_sweep
-
-                        sweep_outcomes = run_continuous_replay_sweep(settings)
-                        if sweep_outcomes:
-                            missed = sum(
-                                1
-                                for o in sweep_outcomes
-                                if o.get("passed_rules", 0) < o.get("total_rules", 0)
-                            )
-                            console.print(
-                                f"[bold magenta]🛡️ Daemon completed Purple Team continuous replay across "
-                                f"{len(sweep_outcomes)} hunts ({missed} with tuning suggestions generated).[/bold magenta]"
-                            )
-                    except Exception as pt_err:
-                        log.error(
-                            "Daemon Purple Team continuous replay error: %s", pt_err, exc_info=True
-                        )
-                    finally:
-                        last_replay_check = now_ts
 
             if max_cycles is not None and cycles_completed >= max_cycles:
                 console.print(
@@ -302,6 +384,10 @@ def daemon(
         console.print(f"[bold red]Fatal daemon exception:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
     finally:
+        stop_event.set()
+        for t in worker_threads:
+            with contextlib.suppress(Exception):
+                t.join(timeout=2.0)
         if retained_cti is not None:
             with contextlib.suppress(Exception):
                 retained_cti.close()

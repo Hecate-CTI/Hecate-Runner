@@ -145,3 +145,127 @@ class TestDaemonCommand:
         result = runner.invoke(app, ["daemon", "--max-cycles", "1", "--interval", "-1"])
         assert result.exit_code == 1
         assert "Invalid --interval" in result.output
+
+    def test_daemon_sweep_job_bounded_by_locks(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hecate_runner.commands.daemon import _execute_sweep_job
+        from hecate_runner.config import Settings
+        from hecate_runner.work_locks import acquire_work_lock
+
+        settings = Settings(
+            hecate_workspace=cli_env,
+            auto_hunt_execution_enabled=True,
+        )
+
+        ran_sweeps = False
+
+        class MockScheduler:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run_scheduled_sweeps(self):
+                nonlocal ran_sweeps
+                ran_sweeps = True
+                return []
+
+        monkeypatch.setattr(
+            "hecate_runner.execution.scheduler.HuntExecutionScheduler",
+            MockScheduler,
+        )
+
+        # 1. Normal execution acquires lock and runs
+        res = _execute_sweep_job(settings)
+        assert ran_sweeps is True
+        assert res == []
+
+        # 2. When lock is held by another worker, tick is skipped nonblockingly
+        lock_path = cli_env / ".hecate" / "sweeps.lock"
+        held_lock = acquire_work_lock(lock_path)
+        assert held_lock is not None
+        try:
+            ran_sweeps = False
+            res_blocked = _execute_sweep_job(settings)
+            assert res_blocked is None
+            assert ran_sweeps is False
+        finally:
+            held_lock.close()
+
+    def test_daemon_replay_job_bounded_by_locks(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hecate_runner.commands.daemon import _execute_replay_job
+        from hecate_runner.config import Settings
+        from hecate_runner.work_locks import acquire_work_lock
+
+        settings = Settings(
+            hecate_workspace=cli_env,
+            purple_team_continuous_replay_interval_sec=10,
+        )
+
+        ran_replay = False
+
+        def mock_sweep(s):
+            nonlocal ran_replay
+            ran_replay = True
+            return [{"hunt_id": "H-0001", "passed_rules": 1, "total_rules": 1}]
+
+        monkeypatch.setattr(
+            "hecate_runner.purple_team.run_continuous_replay_sweep",
+            mock_sweep,
+        )
+
+        # 1. Normal execution acquires lock and runs
+        res = _execute_replay_job(settings)
+        assert ran_replay is True
+        assert len(res) == 1
+
+        # 2. When lock is held by another worker, tick is skipped nonblockingly
+        lock_path = cli_env / ".hecate" / "replay.lock"
+        held_lock = acquire_work_lock(lock_path)
+        assert held_lock is not None
+        try:
+            ran_replay = False
+            res_blocked = _execute_replay_job(settings)
+            assert res_blocked is None
+            assert ran_replay is False
+        finally:
+            held_lock.close()
+
+    def test_daemon_sweep_worker_runs_independently_of_long_cycle(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import time
+
+        from hecate_runner.config import Settings
+
+        sweep_count = 0
+
+        def mock_sweep_job(settings, console=None):
+            nonlocal sweep_count
+            sweep_count += 1
+            return []
+
+        monkeypatch.setattr(
+            "hecate_runner.commands.daemon._execute_sweep_job",
+            mock_sweep_job,
+        )
+
+        class SlowOrch:
+            def run_once(self, dry_run: bool = False) -> RunResult:
+                time.sleep(0.5)
+                return RunResult(outcome="drafted", hunt_id="H-0001")
+
+        monkeypatch.setattr(cli, "build_default_orchestrator", lambda s, **kwargs: SlowOrch())
+
+        mock_settings = Settings(
+            hecate_workspace=cli_env,
+            auto_hunt_execution_enabled=True,
+        )
+        object.__setattr__(mock_settings, "auto_hunt_sweep_interval_sec", 0.1)
+        monkeypatch.setattr("hecate_runner.commands.daemon._get_settings", lambda: mock_settings)
+
+        result = runner.invoke(app, ["daemon", "--max-cycles", "1", "--interval", "1"])
+        assert result.exit_code == 0
+        # Sweep worker executed on its 0.1s interval while the 0.5s slow cycle ran
+        assert sweep_count >= 2
