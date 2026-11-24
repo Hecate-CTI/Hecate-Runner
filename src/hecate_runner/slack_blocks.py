@@ -227,25 +227,22 @@ def build_draft_card(result: RunResult, *, interactive: bool = False) -> list[di
                 purple_text = "⚪ No rules replayed"
 
             bas_ver = fm.get("bas_verified", False)
-            bas_prov = str(fm.get("bas_provider") or "")
-            if bas_prov:
-                if bas_prov.lower() == "mock":
-                    bas_text = (
-                        "🧪 *MOCK* (synthesized AST logic probe)"
-                        if bas_ver
-                        else "⚠️ MOCK probe unverified"
-                    )
-                else:
-                    icon = "✅" if bas_ver else "⚠️"
-                    bas_text = (
-                        f"{icon} *{bas_prov.upper()}* live detonation verified"
-                        if bas_ver
-                        else f"⚠️ {bas_prov.upper()} unverified"
-                    )
+            bas_prov = str(fm.get("bas_provider") or "").strip()
+            bas_status = str(fm.get("bas_status") or "").strip().lower()
+            if bas_status == "skipped" or (not bas_ver and bas_status in {"", "skipped"}):
+                bas_text = "⚪ Optional — skipped (lab probe + KEEP decide publish)"
+            elif bas_prov.lower() == "mock" or bas_status.startswith("simulation"):
+                bas_text = "🧪 Synthetic only — *not* live BAS credit"
+            elif bas_ver and bas_prov:
+                bas_text = f"✅ *{bas_prov.upper()}* live detonation verified"
+            elif bas_prov:
+                bas_text = (
+                    f"⚠️ *{bas_prov.upper()}* live run not verified (`{bas_status or 'unknown'}`)"
+                )
             elif bas_ver:
-                bas_text = "✅ Detonation verified"
+                bas_text = "✅ Live detonation verified"
             else:
-                bas_text = "⚪ Simulation skipped"
+                bas_text = "⚪ Optional — no BAS run"
         except Exception:
             pass
 

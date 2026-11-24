@@ -3,6 +3,12 @@
 Technique IDs alone are not an execution policy: CALDERA may map a technique
 to downloads, payloads, or commands containing facts from intelligence. Pin the
 ability and inspect its executable content before allowing it to run.
+
+Catalog scope is intentional: these are general Linux discovery / canary
+commands. Application-CVE Sigma rules that need product-specific predicates
+should skip BAS rather than earn credit from an unrelated procedure. See
+docs/BAS_AUTOMATION.md ("Honesty: BAS skip vs Sigma coverage") for the
+policy and the future application-scoped expansion milestone.
 """
 
 from __future__ import annotations
@@ -250,8 +256,22 @@ def result_fidelity_scope(result: Mapping[str, Any]) -> str:
     return scope
 
 
+def _is_mock_or_synthetic(result: Mapping[str, Any]) -> bool:
+    """True when the result is mock/synthesis — never live lab credit."""
+    provider = str(result.get("provider") or "").strip().lower()
+    backend = str(result.get("backend") or "").strip().lower()
+    status = str(result.get("status") or "").strip().lower()
+    if result.get("mock_fallback") is True:
+        return True
+    if provider == "mock" or backend == "mock":
+        return True
+    return status in {"simulation_match", "simulation_no_match"}
+
+
 def confirms_technique(result: Mapping[str, Any]) -> bool:
-    """Keep local smoke checks out of technique-validation and promotion credit."""
+    """Live behavioral BAS credit only — never mock, simulation, or smoke checks."""
+    if _is_mock_or_synthetic(result):
+        return False
     return (
         result.get("status") == "verified_true_positive"
         and result_fidelity_scope(result) == "behavioral"
@@ -260,6 +280,9 @@ def confirms_technique(result: Mapping[str, Any]) -> bool:
 
 def result_status(result: Mapping[str, Any]) -> str:
     status = str(result.get("status", "unknown"))
+    if _is_mock_or_synthetic(result) and status == "verified_true_positive":
+        # Old drafts labeled mock runs as verified_true_positive — don't keep that lie.
+        return "simulation_match"
     if status == "verified_true_positive" and not confirms_technique(result):
         return "smoke_check_match"
     return status
@@ -512,7 +535,7 @@ def explain_approved_selection(
     if not approved_hits:
         return (
             "No hunt techniques are both allowlisted and in the approved procedure catalog "
-            f"(techniques={techniques!r}, allowlist={sorted(allowed_set)!r})."
+            f"(techniques={techniques!r}, allowlist_count={len(allowed_set)})."
         )
 
     linux_rules = 0

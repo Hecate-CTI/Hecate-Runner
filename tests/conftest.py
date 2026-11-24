@@ -54,6 +54,7 @@ _ENV_VARS_TO_ISOLATE = (
     "FALCON_API_TOKEN",
     "FALCON_BEARER_TOKEN",
     "HECATE_RUNNER_QUERY_PROVIDER",
+    "HECATE_RUNNER_ALLOW_MOCK",
     "HECATE_WORKSPACE",
     "HECATE_HUNTING_KNOWLEDGE",
     "HECATE_BIN",
@@ -182,6 +183,9 @@ def _never_the_live_workspace(
     monkeypatch.setenv("HECATE_RUNNER_GITHUB_PUBLISHING_ENABLED", "false")
     monkeypatch.setenv("HECATE_BAS_ENABLED", "false")
     monkeypatch.setenv("HECATE_BAS_AUTO_EXECUTE_LIVE", "false")
+    # Unit tests may use mock backends; production defaults forbid them.
+    monkeypatch.setenv("HECATE_RUNNER_ALLOW_MOCK", "true")
+    monkeypatch.setenv("HECATE_RUNNER_QUERY_PROVIDER", "mock")
     monkeypatch.setenv("HECATE_BAS_MODE", "mock")
     monkeypatch.setenv("HECATE_BAS_AUTO_TECHNIQUES", "")
     monkeypatch.setenv("HECATE_WORKSPACE", str(tmp_path_factory.mktemp("unset-workspace")))
@@ -201,6 +205,9 @@ def settings(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Setti
 
     monkeypatch.setenv("HECATE_RUNNER_MISP_PUBLISHING_ENABLED", "false")
     monkeypatch.setenv("HECATE_RUNNER_GITHUB_PUBLISHING_ENABLED", "false")
+    monkeypatch.setenv("HECATE_RUNNER_ALLOW_MOCK", "true")
+    monkeypatch.setenv("HECATE_RUNNER_QUERY_PROVIDER", "mock")
+    monkeypatch.setenv("HECATE_BAS_MODE", "mock")
     monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
     monkeypatch.setenv("HECATE_RUNNER_MIN_HOURS_BETWEEN_DRAFTS", "0.0")

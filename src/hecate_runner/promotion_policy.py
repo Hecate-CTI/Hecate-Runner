@@ -99,6 +99,10 @@ def load_policy(workspace: Path, policy_path: Path | None = None) -> dict[str, A
             raise ValueError(f"promotion policy has an invalid action for risk.{key}")
     if "bas_failed" in risks and risks["bas_failed"] not in _ACTIONS:
         raise ValueError("promotion policy has an invalid action for risk.bas_failed")
+    if "publish_check_failed" in risks and risks["publish_check_failed"] not in _ACTIONS:
+        raise ValueError("promotion policy has an invalid action for risk.publish_check_failed")
+    if "unexecuted_hunt" in risks and risks["unexecuted_hunt"] not in _ACTIONS:
+        raise ValueError("promotion policy has an invalid action for risk.unexecuted_hunt")
     if policy["target_visibility"] == "public":
         if "allow_private" in risks.values():
             raise ValueError("public publication cannot use allow_private risk actions")
@@ -166,11 +170,51 @@ def evaluate_promotion(
             str(risk["incomplete_metadata"]),
             "hunt has incomplete technique, platform, or data-source metadata",
         )
-    if "[Review CTI and populate]" in text:
-        apply(
-            str(risk["incomplete_metadata"]),
-            "hunt contains unfinished template placeholder '[Review CTI and populate]'",
-        )
+    for marker, label in (
+        (
+            "[Review CTI and populate]",
+            "unfinished template placeholder '[Review CTI and populate]'",
+        ),
+        ("[Human to populate]", "unfinished template placeholder '[Human to populate]'"),
+        ("[Human to review]", "unfinished template placeholder '[Human to review]'"),
+        ("[Human review required]", "unfinished template placeholder '[Human review required]'"),
+        ("UNVALIDATED", "UNVALIDATED CHECK (no real lab execution)"),
+        ("UNEXECUTED", "UNEXECUTED KEEP (findings not closed)"),
+        ("Draft only", "findings still marked Draft only"),
+        ("not yet executed", "Events Analyzed still not executed"),
+        ("[TODO]", "TODO placeholder"),
+        ("[TBD]", "TBD placeholder"),
+    ):
+        if marker in text:
+            apply(
+                str(risk["incomplete_metadata"]),
+                f"hunt contains {label}",
+            )
+            break
+
+    # Verify all referenced query files in markdown exist on disk
+    for match in re.finditer(r"\[([^\]]+)\]\((?:file://)?(?:.*?/)?(queries/[^\)#\s]+)\)", text):
+        ref_rel = match.group(2)
+        if not (workspace / ref_rel).is_file():
+            apply(
+                str(risk.get("missing_sigma", "block")),
+                f"hunt references non-existent query file '{ref_rel}'",
+            )
+            break
+
+    if "unexecuted_hunt" in risk:
+        run_count = 0
+        try:
+            run_count = int(metadata.get("execution_run_count") or 0)
+        except (ValueError, TypeError):
+            run_count = 0
+        last_exec = metadata.get("last_executed_at")
+        if not last_exec or run_count < 1:
+            apply(
+                str(risk["unexecuted_hunt"]),
+                "hunt has never been executed against telemetry (execution_run_count < 1)",
+            )
+
     tags = metadata.get("tags") or []
     if not isinstance(tags, list):
         raise ValueError("hunt tags must be a list")
@@ -181,12 +225,28 @@ def evaluate_promotion(
             str(risk["unsupported_claims"]),
             f"grounding audit found {unsupported} unsupported claim(s)",
         )
-    if "bas_failed" in risk and metadata.get("bas_verified") is False:
-        status_note = metadata.get("bas_status") or "unverified"
-        apply(
-            str(risk["bas_failed"]),
-            f"live adversary emulation verification failed ({status_note})",
-        )
+    # BAS is optional for publish. Only a *live* attempt that failed is a risk.
+    # Skipped / mock / synthetic results must not block or look like validation.
+    if "bas_failed" in risk:
+        bas_status = str(metadata.get("bas_status") or "").strip().lower()
+        bas_provider = str(metadata.get("bas_provider") or "").strip().lower()
+        bas_live = metadata.get("bas_live") is True
+        synthetic = bas_provider == "mock" or bas_status.startswith("simulation")
+        skipped = bas_status in {"", "skipped"}
+        if (
+            not skipped
+            and not synthetic
+            and metadata.get("bas_verified") is False
+            and (
+                bas_live
+                or bas_provider in {"caldera", "stratus"}
+                or bas_status in {"failed", "failure"}
+            )
+        ):
+            apply(
+                str(risk["bas_failed"]),
+                f"live adversary emulation verification failed ({bas_status or 'unverified'})",
+            )
 
     from hecate_runner.publish_check import evaluate_saved_hunt
 

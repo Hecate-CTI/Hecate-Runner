@@ -194,6 +194,31 @@ def test_render_draft_includes_lab_probe(sample_hypothesis: HypothesisResult) ->
     assert "### Lab query probe" in md
     assert "`process.kql`" in md
     assert "| 0 | 1d | `miss` |" in md
+    assert "readiness: lab_validated" in md
+    assert "**Events Analyzed:** 0 (lab probe: `miss`)" in md
+    assert "UNVALIDATED" not in md.split("## KEEP:")[0]
+    assert "UNEXECUTED" in md
+    assert "publish_check: block" in md
+
+
+def test_render_draft_marks_check_unvalidated_without_real_lab(
+    sample_hypothesis: HypothesisResult,
+) -> None:
+    req = DraftHuntRequest(
+        hunt_id="H-0999",
+        threat_intel="APT actor X observed dumping LSASS.",
+        hypothesis=sample_hypothesis,
+        generated_at=datetime(2026, 7, 4, 22, 0, tzinfo=UTC),
+    )
+    md = render_draft(req)
+    assert "readiness: unvalidated" in md
+    assert "UNVALIDATED — not production-ready" in md
+    assert "UNEXECUTED — KEEP is empty" in md
+    assert "- **Index/Data Source:** [Human to populate]" not in md
+    assert "- **Time Range:** [Human to populate]" not in md
+    assert "**Events Analyzed:** UNVALIDATED" in md
+    assert "Draft only" not in md
+    assert "publish_check: block" in md
 
 
 def test_render_draft_cites_enrichment_outcomes(sample_hypothesis: HypothesisResult) -> None:

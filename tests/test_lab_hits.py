@@ -11,15 +11,15 @@ from hecate_runner.lab_hits import (
 from hecate_runner.query_execution import MockQueryProvider
 
 
-def test_probe_skips_mock_provider_by_default(tmp_path: Path) -> None:
+def test_probe_rejects_mock_provider_as_error(tmp_path: Path) -> None:
     query_dir = tmp_path / "queries"
     query_dir.mkdir()
     (query_dir / "rule.kql").write_text("DeviceProcessEvents | where FileName =~ 'a.exe'\n")
 
     report = probe_lab_hits("H-0001", query_dir, provider_name="mock")
 
-    assert report.status == "skipped"
-    assert "mock" in report.detail.lower()
+    assert report.status == "error"
+    assert "forbidden" in report.detail.lower()
     assert report.results == []
 
 
@@ -112,6 +112,18 @@ def test_format_lab_probe_slack_miss() -> None:
     assert "1d" in text
 
 
-def test_format_lab_probe_slack_skips_mock_quietly_when_empty_status() -> None:
+def test_format_lab_probe_slack_skips_empty_status() -> None:
     assert format_lab_probe_slack(None) == ""
     assert format_lab_probe_slack({"status": ""}) == ""
+
+
+def test_format_lab_probe_slack_calls_out_forbidden_mock() -> None:
+    text = format_lab_probe_slack(
+        {
+            "status": "error",
+            "provider": "mock",
+            "detail": "mock query provider is forbidden — configure a real SIEM backend",
+        }
+    )
+    assert "FORBIDDEN" in text
+    assert "mock" in text.lower()

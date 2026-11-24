@@ -96,6 +96,28 @@ def test_promotion_policy_blocks_on_bas_failure(tmp_path: Path) -> None:
     )
 
 
+def test_promotion_policy_ignores_skipped_bas(tmp_path: Path) -> None:
+    workspace = _setup_test_workspace(tmp_path, bas_verified=False, bas_status="skipped")
+    hunt = workspace / "hunts" / "2026" / "Q4" / "H-0010.md"
+    text = hunt.read_text(encoding="utf-8").replace(
+        "bas_verified: false", "bas_verified: false\nbas_live: false"
+    )
+    # Remove bas_verified so skipped looks like a normal optional skip
+    text = text.replace("bas_verified: false\n", "")
+    hunt.write_text(text, encoding="utf-8")
+    decision = evaluate_promotion(workspace, "H-0010")
+    assert not any("adversary emulation" in r for r in decision.reasons)
+
+
+def test_promotion_policy_ignores_mock_bas_failure(tmp_path: Path) -> None:
+    workspace = _setup_test_workspace(tmp_path, bas_verified=False, bas_status="simulation_match")
+    hunt = workspace / "hunts" / "2026" / "Q4" / "H-0010.md"
+    text = hunt.read_text(encoding="utf-8").replace("bas_provider: caldera", "bas_provider: mock")
+    hunt.write_text(text, encoding="utf-8")
+    decision = evaluate_promotion(workspace, "H-0010")
+    assert not any("adversary emulation" in r for r in decision.reasons)
+
+
 def test_promotion_policy_passes_on_bas_success(tmp_path: Path) -> None:
     workspace = _setup_test_workspace(
         tmp_path, bas_verified=True, bas_status="verified_true_positive"
@@ -144,7 +166,7 @@ def test_hunt_with_unfilled_placeholder_requires_review(tmp_path: Path) -> None:
     decision = evaluate_promotion(workspace, "H-0010")
     assert decision.eligible is False
     assert decision.review_required is True
-    assert any("unfinished template placeholder" in r for r in decision.reasons)
+    assert any("Review CTI and populate" in r for r in decision.reasons)
 
 
 def test_promotion_policy_flags_publish_check_blocking_finding(tmp_path: Path) -> None:
@@ -166,7 +188,34 @@ hecate_review:
   unverified_contradiction: The rule attempts to detect exploitation through network signatures
 """
     (workspace / "queries" / "H-0010" / "rule.yml").write_text(rejected_rule, encoding="utf-8")
+    # Private fixture omits publish_check_failed → defaults to review.
+    # Public promotion-policy.yaml sets publish_check_failed: block.
     decision = evaluate_promotion(workspace, "H-0010")
     assert decision.eligible is False
     assert decision.review_required is True
     assert any("publish check blocking finding" in r for r in decision.reasons)
+
+
+def test_public_policy_blocks_publish_check_failures(tmp_path: Path) -> None:
+    workspace = _setup_test_workspace(
+        tmp_path, bas_verified=True, bas_status="verified_true_positive"
+    )
+    policy = yaml.safe_load((workspace / "promotion-policy.yaml").read_text(encoding="utf-8"))
+    policy["risk"]["publish_check_failed"] = "block"
+    (workspace / "promotion-policy.yaml").write_text(yaml.safe_dump(policy), encoding="utf-8")
+    rejected_rule = """
+title: Contradicted HTTP2 rule
+description: attempts to detect network traffic despite guidance saying no signature exists
+logsource:
+  category: webserver
+detection:
+  selection:
+    cs-method: GET
+  condition: selection
+hecate_review:
+  verdict: reject
+  unverified_contradiction: The rule attempts to detect exploitation through network signatures
+"""
+    (workspace / "queries" / "H-0010" / "rule.yml").write_text(rejected_rule, encoding="utf-8")
+    with pytest.raises(ValueError, match="publish check blocking finding"):
+        evaluate_promotion(workspace, "H-0010")

@@ -103,6 +103,11 @@ def get_bas_provider(
         )
 
     if name_lower == "mock":
+        if settings is not None and not getattr(settings, "allow_mock_backends", False):
+            raise SafetyViolationError(
+                "Mock BAS is forbidden. Set HECATE_BAS_MODE=caldera|stratus "
+                "(HECATE_RUNNER_ALLOW_MOCK=true is tests/demo only)."
+            )
         return MockBASProvider(allowed_hosts=hosts, allowed_accounts=accounts)
 
     raise ValueError(

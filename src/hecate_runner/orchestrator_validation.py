@@ -270,7 +270,11 @@ def run_bas_validation(
             # Soft fallback whenever mock synthesis is enabled and there are rules
             # to probe — independent of auto-execute. Live lab health fallback is
             # handled separately inside CalderaConnector.
-            can_mock = bool(getattr(orch.settings, "bas_fallback_to_mock", False)) and bool(rules)
+            can_mock = (
+                bool(getattr(orch.settings, "bas_fallback_to_mock", False))
+                and bool(getattr(orch.settings, "allow_mock_backends", False))
+                and bool(rules)
+            )
             if can_mock:
                 log.info(
                     "Live BAS unavailable (%s); falling back to AST telemetry synthesis mock verification.",

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from hecate_agent.core.workspace import workspace_root
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -385,9 +385,12 @@ class Settings(BaseSettings):
         description="Docker container name of the local CALDERA controller.",
     )
     bas_mode: Literal["mock", "caldera", "stratus", "local_sandbox", "live_lab"] = Field(
-        default="mock",
+        default="caldera",
         alias="HECATE_BAS_MODE",
-        description="Operational mode for BAS execution ('caldera', 'stratus', 'mock'; 'local_sandbox' and 'live_lab' alias to 'caldera').",
+        description=(
+            "BAS execution backend. Production default is caldera. "
+            "'mock' is forbidden unless HECATE_RUNNER_ALLOW_MOCK=true (tests/demo only)."
+        ),
     )
     bas_allowed_hosts: Any = Field(
         default_factory=list,
@@ -423,9 +426,8 @@ class Settings(BaseSettings):
         default=False,
         alias="HECATE_BAS_FALLBACK_TO_MOCK",
         description=(
-            "Soft-fall back to mock synthesis when live BAS cannot run (no approved "
-            "procedure/platform, Caldera unreachable, or no agent). Never blocks live "
-            "approved automation when the lab is healthy."
+            "FORBIDDEN in production. Soft-fall back to mock synthesis when live BAS "
+            "cannot run. Requires HECATE_RUNNER_ALLOW_MOCK=true; otherwise Settings refuse to load."
         ),
     )
     bas_linux_host: str = Field(
@@ -1326,10 +1328,22 @@ class Settings(BaseSettings):
     )
 
     # --- Query execution ("propose, don't run") --------------------------------
+    allow_mock_backends: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_ALLOW_MOCK",
+        description=(
+            "Allow mock query/BAS backends. Default false — production must use a real "
+            "SIEM (splunk/sentinel/elastic/crowdstrike) and real BAS (caldera/stratus). "
+            "Tests/demo set this true explicitly."
+        ),
+    )
     query_provider: Literal["mock", "splunk", "sentinel", "elastic", "crowdstrike"] = Field(
-        default="mock",
+        default="splunk",
         alias="HECATE_RUNNER_QUERY_PROVIDER",
-        description="Backend for approved queries: mock, Splunk, Sentinel KQL, Elastic EQL, or LogScale CQL.",
+        description=(
+            "SIEM backend for lab probes and approved queries. Default splunk. "
+            "'mock' is forbidden unless HECATE_RUNNER_ALLOW_MOCK=true."
+        ),
     )
     query_sentinel_workspace_id: str | None = Field(default=None, alias="SENTINEL_WORKSPACE_ID")
     query_sentinel_token: str | None = Field(
@@ -1387,8 +1401,8 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_LAB_HIT_PROBE",
         description=(
             "After drafting native queries, run a bounded COUNT-FIRST probe against the "
-            "configured query provider and surface hit/miss on the review card. Skips when "
-            "the provider is mock or unconfigured."
+            "configured query provider and surface hit/miss on the review card. "
+            "Mock providers are an error, not a quiet skip."
         ),
     )
     lab_hit_probe_window_days: int = Field(
@@ -1677,6 +1691,31 @@ class Settings(BaseSettings):
         return self.hecate_workspace / ".pending_queries"
 
     # --- Validators ---------------------------------------------------------
+
+    @model_validator(mode="after")
+    def _refuse_mock_backends_unless_allowed(self) -> Settings:
+        """Production must not silently run on mock SIEM/BAS."""
+        if self.allow_mock_backends:
+            return self
+        problems: list[str] = []
+        if self.query_provider == "mock":
+            problems.append(
+                "HECATE_RUNNER_QUERY_PROVIDER=mock is forbidden — set splunk, sentinel, "
+                "elastic, or crowdstrike (or HECATE_RUNNER_ALLOW_MOCK=true for tests only)"
+            )
+        if self.bas_mode == "mock":
+            problems.append(
+                "HECATE_BAS_MODE=mock is forbidden — set caldera or stratus "
+                "(or HECATE_RUNNER_ALLOW_MOCK=true for tests only)"
+            )
+        if self.bas_fallback_to_mock:
+            problems.append(
+                "HECATE_BAS_FALLBACK_TO_MOCK=true is forbidden — fix the lab instead of "
+                "faking detonations (or HECATE_RUNNER_ALLOW_MOCK=true for tests only)"
+            )
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
 
     @field_validator("purple_team_atomic_mode", mode="before")
     @classmethod

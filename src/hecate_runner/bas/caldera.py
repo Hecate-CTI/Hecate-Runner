@@ -189,6 +189,8 @@ class CalderaConnector(BASProvider):
                 )
 
         # 2. Check if an active agent exists for target platform (fallback to mock if enabled)
+        # Never synthesize a fake detonation unless the operator explicitly
+        # opted into mock fallback (tests/demo only; Settings refuse this in prod).
         if self.fallback_to_mock:
             try:
                 client = self._get_client()
