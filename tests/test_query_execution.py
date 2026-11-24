@@ -267,12 +267,29 @@ class TestSplunkQueryProvider:
         assert not result.ok
         assert "auth failed" in result.detail
 
-    def test_no_json_array_in_output_is_an_error(self, tmp_path: Path) -> None:
+    def test_no_results_found_is_empty_success(self, tmp_path: Path) -> None:
         fake = self._make_fake_hecate(tmp_path, "#!/bin/sh\necho 'No results found'\n")
         provider = SplunkQueryProvider(hecate_bin=fake, workspace=tmp_path)
 
         result = provider.execute(_query())
-        assert not result.ok
+        assert result.ok
+        assert result.row_count == 0
+
+    def test_injects_workspace_splunk_env_into_subprocess(self, tmp_path: Path) -> None:
+        (tmp_path / ".env").write_text(
+            "SPLUNK_HOST=https://splunk.test:8089\nSPLUNK_TOKEN=test-token\n",
+            encoding="utf-8",
+        )
+        fake = self._make_fake_hecate(
+            tmp_path,
+            "#!/bin/sh\n"
+            'if [ -z "$SPLUNK_HOST" ] || [ -z "$SPLUNK_TOKEN" ]; then echo missing >&2; exit 1; fi\n'
+            "printf '[]\\n'\n",
+        )
+        provider = SplunkQueryProvider(hecate_bin=fake, workspace=tmp_path)
+        result = provider.execute(_query())
+        assert result.ok
+        assert provider.configuration_errors() == []
 
     def test_timeout_is_an_error(self, tmp_path: Path) -> None:
         fake = self._make_fake_hecate(tmp_path, "#!/bin/sh\nsleep 5\n")

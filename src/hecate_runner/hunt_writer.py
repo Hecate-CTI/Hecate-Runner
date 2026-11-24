@@ -934,24 +934,26 @@ def _render_atomic_tests(techniques: list[str], platforms: list[str] | None = No
 
 
 def _render_bas_verification(req: DraftHuntRequest) -> str:
-    """Render closed-loop adversary emulation & breach simulation (BAS) validation findings."""
+    """Render BAS findings. Optional for publish — only live caldera credit counts."""
     if not req.bas_verification:
         return ""
     bas = req.bas_verification
     status = result_status(bas)
     if status == "skipped":
+        reason = str(bas.get("reason") or "No approved procedure.")
         return (
-            "\n### Breach & Attack Simulation (BAS)\n\n**Skipped:** "
-            + str(bas.get("reason", "No approved procedure."))
-            + "\n"
+            "\n### Breach & Attack Simulation (BAS)\n\n"
+            "> **Optional — skipped (not required for publish).**\n"
+            f"> {reason}\n"
+            "> Readiness is decided by lab probe + closed KEEP, not BAS.\n"
         )
     status_badge = {
-        "smoke_check_match": "🧪 **SMOKE CHECK MATCH (Technique behavior not validated)**",
-        "simulation_match": "🧪 **SIMULATION MATCH (Synthetic Sigma logic probe)**",
-        "simulation_no_match": "🧪 **NO SIMULATION MATCH (Synthetic Sigma logic probe)**",
-        "verified_true_positive": "✅ **VERIFIED TRUE POSITIVE**",
-        "detection_miss": "⚠️ **DETECTION MISS (Telemetry arrived, rule missed)**",
-        "telemetry_missing": "❌ **TELEMETRY MISSING (Sensor blind spot - no events observed)**",
+        "smoke_check_match": "🧪 **SMOKE CHECK — not technique validation**",
+        "simulation_match": "🧪 **SYNTHETIC ONLY — not live BAS credit**",
+        "simulation_no_match": "🧪 **SYNTHETIC MISS — not live BAS credit**",
+        "verified_true_positive": "✅ **LIVE VERIFIED TRUE POSITIVE**",
+        "detection_miss": "⚠️ **LIVE DETECTION MISS**",
+        "telemetry_missing": "❌ **TELEMETRY MISSING**",
         "detonation_failed": "⚠️ **DETONATION FAILED**",
         "error": "❌ **EXECUTION ERROR**",
     }.get(status, f"`{status}`")
@@ -962,14 +964,16 @@ def _render_bas_verification(req: DraftHuntRequest) -> str:
     duration = bas.get("duration_seconds", 0.0)
     notes = bas.get("notes") or []
     notes_str = "; ".join(notes) if notes else ""
+    credited = confirms_technique(bas)
 
     lines = [
         "",
         "### Adversary Emulation & Breach Simulation (BAS)",
         "",
-        f"> **Closed-Loop Validation Result:** {status_badge}",
+        f"> **Result:** {status_badge}",
         "> ",
         f"> - **Provider:** `{provider}`",
+        f"> - **Publish credit:** {'yes (live behavioral)' if credited else 'no — optional / not live'}",
         f"> - **Fidelity:** `{result_fidelity_scope(bas)}`",
         f"> - **Verification scope:** `{bas.get('verification_scope', 'rule_evaluation')}`",
         f"> - **Target Technique:** `{technique}` ({bas.get('ability_id', '')})",

@@ -250,8 +250,24 @@ def result_fidelity_scope(result: Mapping[str, Any]) -> str:
     return scope
 
 
+def _is_mock_or_synthetic(result: Mapping[str, Any]) -> bool:
+    """True when the result is mock/synthesis — never live lab credit."""
+    provider = str(result.get("provider") or "").strip().lower()
+    backend = str(result.get("backend") or "").strip().lower()
+    status = str(result.get("status") or "").strip().lower()
+    if result.get("mock_fallback") is True:
+        return True
+    if provider == "mock" or backend == "mock":
+        return True
+    if status in {"simulation_match", "simulation_no_match"}:
+        return True
+    return False
+
+
 def confirms_technique(result: Mapping[str, Any]) -> bool:
-    """Keep local smoke checks out of technique-validation and promotion credit."""
+    """Live behavioral BAS credit only — never mock, simulation, or smoke checks."""
+    if _is_mock_or_synthetic(result):
+        return False
     return (
         result.get("status") == "verified_true_positive"
         and result_fidelity_scope(result) == "behavioral"
@@ -260,6 +276,9 @@ def confirms_technique(result: Mapping[str, Any]) -> bool:
 
 def result_status(result: Mapping[str, Any]) -> str:
     status = str(result.get("status", "unknown"))
+    if _is_mock_or_synthetic(result) and status == "verified_true_positive":
+        # Old drafts labeled mock runs as verified_true_positive — don't keep that lie.
+        return "simulation_match"
     if status == "verified_true_positive" and not confirms_technique(result):
         return "smoke_check_match"
     return status

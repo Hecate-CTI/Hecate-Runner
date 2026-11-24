@@ -487,7 +487,8 @@ def test_unsupported_hunts_record_skip_without_claiming_verification(
     text = render_draft(req)
     assert 'bas_status: "skipped"' in text
     assert "bas_verified:" not in text
-    assert "**Skipped:**" in text
+    assert "Optional — skipped" in text
+    assert "not required for publish" in text
 
 
 def test_fallback_to_mock_when_live_unsupported_even_with_auto_execute(tmp_path, monkeypatch):

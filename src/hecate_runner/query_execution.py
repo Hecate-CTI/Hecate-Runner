@@ -580,15 +580,30 @@ class CrowdStrikeQueryProvider(_HTTPQueryProvider):
         return data, "events"
 
 
-class SplunkQueryProvider(QueryProvider):
-    """Shells out to `hecate-agent splunk search`, same subprocess pattern as HecateClient.
+def _splunk_subprocess_env(workspace: Path) -> dict[str, str]:
+    """Env for `hecate-agent splunk` with workspace .env SPLUNK_* forced in.
 
-    Unvalidated against a real Splunk instance as of this writing -- there is
-    no live Splunk access in this environment yet. The guardrail enforcement
-    and propose/approve flow around this class are what's actually tested;
-    this exists so wiring in real access later is a config change
-    (HECATE_RUNNER_QUERY_PROVIDER=splunk), not new code.
+    Click resolves ``envvar=SPLUNK_HOST`` before the command body can
+    ``load_dotenv``, and parent processes often lack Splunk creds even when
+    the workspace ``.env`` has them. Inject explicitly so lab probes are real.
     """
+    env = os.environ.copy()
+    env["HECATE_WORKSPACE"] = str(workspace)
+    dotenv_path = workspace / ".env"
+    if dotenv_path.is_file():
+        try:
+            from dotenv import dotenv_values
+        except ImportError:
+            dotenv_values = None  # type: ignore[assignment]
+        if dotenv_values is not None:
+            for key, value in dotenv_values(dotenv_path).items():
+                if key and value is not None and key.startswith("SPLUNK_"):
+                    env[key] = value
+    return env
+
+
+class SplunkQueryProvider(QueryProvider):
+    """Shells out to `hecate-agent splunk search` against a live Splunk instance."""
 
     name = "splunk"
 
@@ -596,6 +611,18 @@ class SplunkQueryProvider(QueryProvider):
         self.hecate_bin = hecate_bin
         self.workspace = workspace
         self.timeout_sec = timeout_sec
+
+    def configuration_errors(self) -> list[str]:
+        env = _splunk_subprocess_env(self.workspace)
+        host = (env.get("SPLUNK_HOST") or env.get("SPLUNK_URL") or "").strip()
+        token = (env.get("SPLUNK_TOKEN") or env.get("SPLUNK_READ_TOKEN") or "").strip()
+        password = (env.get("SPLUNK_PASSWORD") or "").strip()
+        errors: list[str] = []
+        if not host:
+            errors.append("SPLUNK_HOST missing from environment and workspace .env")
+        if not token and not password:
+            errors.append("SPLUNK_TOKEN/SPLUNK_PASSWORD missing from environment and workspace .env")
+        return errors
 
     def execute(self, query: ProposedQuery) -> QueryResult:
         query_text = query.query_text.strip()
@@ -622,6 +649,7 @@ class SplunkQueryProvider(QueryProvider):
             result = run_process_group(
                 cmd,
                 cwd=str(self.workspace),
+                env=_splunk_subprocess_env(self.workspace),
                 text=True,
                 timeout=self.timeout_sec,
                 check=False,
@@ -638,15 +666,23 @@ class SplunkQueryProvider(QueryProvider):
             )
 
         if result.returncode != 0:
-            return QueryResult(
-                outcome="error", provider=self.name, detail=result.stderr.strip()[:500]
-            )
+            detail = (result.stderr or result.stdout or "").strip()[:500] or "splunk search failed"
+            return QueryResult(outcome="error", provider=self.name, detail=detail)
 
         # `hecate-agent splunk search --format json` prints a human-readable banner to
         # stdout before the JSON array, even in JSON mode -- find where the
         # array starts rather than assuming the whole stream is valid JSON.
         start = result.stdout.find("[")
         if start == -1:
+            # Zero hits: CLI prints "No results found" with no JSON array.
+            if "no results found" in result.stdout.lower():
+                return QueryResult(
+                    outcome="executed",
+                    provider=self.name,
+                    row_count=0,
+                    detail="[]",
+                    events=[],
+                )
             return QueryResult(
                 outcome="error",
                 provider=self.name,

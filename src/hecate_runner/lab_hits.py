@@ -1,7 +1,7 @@
 """Draft-time lab query probe: run drafted native queries against the configured SIEM.
 
 Surfaces hit count, time window, and miss/hit/error on the review card next to
-publish findings. Skips clearly when the provider is mock or unconfigured.
+publish findings. Mock providers are an error — never a quiet skip that looks OK.
 """
 
 from __future__ import annotations
@@ -90,6 +90,15 @@ def _skipped(provider: str, window_days: int, detail: str) -> LabProbeReport:
     )
 
 
+def _forbidden_mock(window_days: int) -> LabProbeReport:
+    return LabProbeReport(
+        provider="mock",
+        window_days=window_days,
+        status="error",
+        detail="mock query provider is forbidden — configure a real SIEM backend",
+    )
+
+
 def _unconfigured(provider: str, window_days: int, errors: list[str]) -> LabProbeReport:
     return LabProbeReport(
         provider=provider,
@@ -155,7 +164,7 @@ def probe_lab_hits(
     query_dir: Path,
     *,
     provider: QueryProvider | None = None,
-    provider_name: str = "mock",
+    provider_name: str = "splunk",
     hecate_bin: Path | None = None,
     workspace: Path | None = None,
     max_time_range_days: int = 7,
@@ -168,15 +177,17 @@ def probe_lab_hits(
 ) -> LabProbeReport:
     """Run drafted native queries against the lab SIEM (COUNT-FIRST).
 
-    When ``provider_name`` is ``mock`` and ``allow_mock`` is false, returns a
-    skipped report so draft cards never present simulated counts as lab hits.
-    Tests pass ``allow_mock=True`` or an explicit ``provider``.
+    ``provider_name=mock`` without an explicit ``provider`` object is always an
+    **error** (not a quiet skip). Unit tests that need synthetic counts pass an
+    explicit ``MockQueryProvider`` via ``provider=``.
     """
     name = (provider.name if provider is not None else provider_name).strip().lower()
     window = max(1, min(int(window_days), int(max_time_range_days)))
 
-    if name == "mock" and provider is None and not allow_mock:
-        return _skipped("mock", window, "query provider is mock (no lab backend)")
+    if name == "mock" and provider is None:
+        # allow_mock only lets callers inject MockQueryProvider; bare mock name is forbidden.
+        _ = allow_mock
+        return _forbidden_mock(window)
 
     if provider is None:
         try:
@@ -189,7 +200,7 @@ def probe_lab_hits(
                 env_overrides=env_overrides,
             )
         except ValueError as exc:
-            return _skipped(name, window, str(exc))
+            return _unconfigured(name or "unknown", window, [str(exc)])
 
     config_errors = provider.configuration_errors()
     if config_errors:
@@ -303,10 +314,8 @@ def format_lab_probe_slack(probe: dict[str, Any] | LabProbeReport | None) -> str
     if not data or not isinstance(data, dict):
         return ""
     status = str(data.get("status") or "").strip().lower()
+    detail = str(data.get("detail") or "")
     if not status or status == "skipped":
-        detail = str(data.get("detail") or "")
-        if "mock" in detail.lower():
-            return "*Lab hits:* skipped (mock provider — not a live lab)."
         return ""
     provider = str(data.get("provider") or "lab")
     window = data.get("window_days") or "?"
@@ -314,7 +323,9 @@ def format_lab_probe_slack(probe: dict[str, Any] | LabProbeReport | None) -> str
     if status == "unconfigured":
         return f"*Lab hits:* `{provider}` not configured — {data.get('detail') or 'missing credentials'}."
     if status == "error":
-        return f"*Lab hits:* error on `{provider}` — {data.get('detail') or 'query failed'}."
+        if "mock" in detail.lower() or provider.lower() == "mock":
+            return "*Lab hits:* FORBIDDEN — mock provider is not a live lab. Set a real SIEM."
+        return f"*Lab hits:* error on `{provider}` — {detail or 'query failed'}."
     if status == "miss":
         return f"*Lab hits:* miss on `{provider}` (0 hits in {window}d)."
     if status == "overmatch":

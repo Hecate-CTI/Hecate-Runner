@@ -249,7 +249,7 @@ def test_automatic_pipeline_bas_validates_multiple_rules(tmp_path: Path) -> None
     assert "bas_verified: false" in rendered
     assert 'bas_status: "simulation_match"' in rendered
     assert "bas_detection_triggered: true" in rendered
-    assert "🧪 **SIMULATION MATCH" in rendered
+    assert "SYNTHETIC" in rendered and "not live BAS credit" in rendered
     assert "- **Detection Triggered:** Yes (4 hit(s))" in rendered
 
 
