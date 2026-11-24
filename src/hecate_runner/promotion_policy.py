@@ -225,12 +225,24 @@ def evaluate_promotion(
             str(risk["unsupported_claims"]),
             f"grounding audit found {unsupported} unsupported claim(s)",
         )
-    if "bas_failed" in risk and metadata.get("bas_verified") is False:
-        status_note = metadata.get("bas_status") or "unverified"
-        apply(
-            str(risk["bas_failed"]),
-            f"live adversary emulation verification failed ({status_note})",
-        )
+    # BAS is optional for publish. Only a *live* attempt that failed is a risk.
+    # Skipped / mock / synthetic results must not block or look like validation.
+    if "bas_failed" in risk:
+        bas_status = str(metadata.get("bas_status") or "").strip().lower()
+        bas_provider = str(metadata.get("bas_provider") or "").strip().lower()
+        bas_live = metadata.get("bas_live") is True
+        synthetic = bas_provider == "mock" or bas_status.startswith("simulation")
+        skipped = bas_status in {"", "skipped"}
+        if (
+            not skipped
+            and not synthetic
+            and metadata.get("bas_verified") is False
+            and (bas_live or bas_provider in {"caldera", "stratus"} or bas_status in {"failed", "failure"})
+        ):
+            apply(
+                str(risk["bas_failed"]),
+                f"live adversary emulation verification failed ({bas_status or 'unverified'})",
+            )
 
     from hecate_runner.publish_check import evaluate_saved_hunt
 
