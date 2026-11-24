@@ -18,7 +18,7 @@ logsource: {category: process_creation}
 detection:
   selection: {Image|endswith: '\\\\cmd.exe'}
   condition: selection
-hecate_review: {verdict: revise, issues: [no parent constraint]}
+hecate_review: {verdict: keep, issues: []}
 """
 
 
@@ -123,7 +123,7 @@ def test_review_is_requested_and_logged(
     _, trail = _run(settings, mock_hecate, caplog)
     assert mock_hecate.sigma_generator.call_args.args[0]["review_rules"] is True
     assert any(
-        "1 model rule(s) reviewed (cmd.exe launched by a resume executable: revise); "
+        "1 model rule(s) reviewed (cmd.exe launched by a resume executable: keep); "
         "1 uncovered behaviour(s): decoy opened in Word" in m
         for m in trail
     )

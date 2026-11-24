@@ -555,6 +555,7 @@ class OrchestratorRulesMixin:
             )
             return
 
+        req.review_gaps = result.review_gaps
         req.sigma_rejections.extend(
             {"title": "Generated proposal", "reason": reason}
             for reason in result.rejected
