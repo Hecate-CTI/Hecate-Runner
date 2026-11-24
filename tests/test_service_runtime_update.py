@@ -48,6 +48,40 @@ def test_unprivileged_updates_stop_before_host_mutations(tmp_path, monkeypatch):
         updater.update(tmp_path)
 
 
+def test_candidate_missing_quality_protections_stops_before_environment_or_services(
+    tmp_path, monkeypatch
+):
+    import subprocess
+
+    prefix = tmp_path / "opt"
+    previous = prefix / "releases/old"
+    previous.mkdir(parents=True)
+    current = prefix / "runtime"
+    current.symlink_to(previous)
+    stage = tmp_path / "stage"
+    (stage / "venv/bin").mkdir(parents=True)
+    (stage / "venv/bin/python").touch()
+    monkeypatch.setattr(updater.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(updater.os, "umask", lambda *_: 0)
+    monkeypatch.setattr(updater, "managed_prefix", lambda: prefix)
+    monkeypatch.setattr(
+        updater,
+        "installed_environment",
+        lambda role: pytest.fail("Read live environment after failed preflight"),
+    )
+    calls = []
+
+    def command(*args, **kwargs):
+        calls.append(args)
+        raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(updater.installer, "command", command)
+    with pytest.raises(subprocess.CalledProcessError):
+        updater.update(stage)
+    assert current.resolve() == previous
+    assert calls == [(str(stage / "venv/bin/python"), "-I", "-m", "hecate_runner.runtime_contract")]
+
+
 def test_canaries_use_actual_shared_reference_setting_without_credentials(tmp_path, monkeypatch):
     import subprocess
 

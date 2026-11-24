@@ -264,6 +264,20 @@ def update(
     stage = stage.resolve()
     if not (stage / "venv/bin/python").is_file():
         raise ValueError("Prepared runtime is missing")
+    # Run the candidate's installed packages, not the checkout invoking this
+    # updater. Missing protections stop the update before backups or draining.
+    installer.command(
+        str(stage / "venv/bin/python"),
+        "-I",
+        "-m",
+        "hecate_runner.runtime_contract",
+        cwd=stage,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HECATE_SERVICE_ISOLATED": "1",
+            "PYTHON_DOTENV_DISABLED": "1",
+        },
+    )
     envs = {role: installed_environment(role) for role in installer.ROLES}
     updates = {
         role: model_environment_changes(values, complex_model, source_extraction_tier)
