@@ -265,9 +265,7 @@ def _is_mock_or_synthetic(result: Mapping[str, Any]) -> bool:
         return True
     if provider == "mock" or backend == "mock":
         return True
-    if status in {"simulation_match", "simulation_no_match"}:
-        return True
-    return False
+    return status in {"simulation_match", "simulation_no_match"}
 
 
 def confirms_technique(result: Mapping[str, Any]) -> bool:

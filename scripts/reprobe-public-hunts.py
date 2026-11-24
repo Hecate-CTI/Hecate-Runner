@@ -96,7 +96,7 @@ def main() -> int:
         # Strip mock BAS credit
         provider = str(fm.get("bas_provider") or "").strip().lower()
         bas_status = str(fm.get("bas_status") or "").strip().lower()
-        if provider == "mock" or bas_status.startswith("simulation") or fm.get("bas_verified") is True and provider == "mock":
+        if provider == "mock" or bas_status.startswith("simulation") or (fm.get("bas_verified") is True and provider == "mock"):
             updates["bas_verified"] = False
             updates["bas_live"] = False
             updates["bas_type"] = "synthesized_probe"
