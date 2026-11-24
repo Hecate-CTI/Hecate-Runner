@@ -184,12 +184,31 @@ def get_hunt_lifecycle(workspace: Path, hunt_id: str) -> dict[str, Any]:
     }
 
 
+_INCOMPLETE_ACTIVE_MARKERS = (
+    "UNVALIDATED",
+    "UNEXECUTED",
+    "[Human to populate]",
+    "[Review CTI and populate]",
+    "[To be completed after human review",
+    "Draft only",
+    "not yet executed",
+)
+
+
+def hunt_has_incomplete_execution(body: str) -> list[str]:
+    """Return incompleteness markers that must be cleared before `active`."""
+    text = body or ""
+    return [marker for marker in _INCOMPLETE_ACTIVE_MARKERS if marker.lower() in text.lower()]
+
+
 def set_hunt_lifecycle(
     workspace: Path,
     hunt_id: str,
     new_status: str,
     reason: str = "",
     actor: str = "analyst",
+    *,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Transition a hunt's lifecycle status and persist provenance metadata into frontmatter.
 
@@ -199,6 +218,8 @@ def set_hunt_lifecycle(
         new_status: Target lifecycle state (planning, testing, active, deprecated, retired).
         reason: Optional sign-off explanation or justification.
         actor: Identifier of the analyst or automated system making the transition.
+        force: When True, allow `active` even if CHECK/KEEP still look unfinished.
+            Prefer fixing the hunt; force is for explicit operator override only.
 
     Returns:
         Updated lifecycle dictionary.
@@ -222,9 +243,27 @@ def set_hunt_lifecycle(
             "error": f"Unable to parse frontmatter in {hunt_path}",
         }
 
+    if canonical_status == "active" and not force:
+        incomplete = hunt_has_incomplete_execution(body)
+        if incomplete:
+            shown = ", ".join(incomplete[:4])
+            return {
+                "ok": False,
+                "hunt_id": hunt_id,
+                "error": (
+                    f"{hunt_id} cannot become active while CHECK/KEEP are unfinished "
+                    f"({shown}). Close lab validation and findings, or pass force=True "
+                    "with a written override reason."
+                ),
+                "incomplete": incomplete,
+            }
+
     now_iso = datetime.now(UTC).isoformat()
     old_status = fm.get("status", "planning")
     fm["status"] = canonical_status
+    if canonical_status == "active" and force and reason:
+        fm["lifecycle_force_active"] = True
+        fm["lifecycle_force_reason"] = reason
 
     if canonical_status == "deprecated":
         fm["deprecated_at"] = now_iso
@@ -307,30 +346,16 @@ def set_hunt_lifecycle(
             body,
             flags=re.IGNORECASE,
         )
-        # 4. Fill unpopulated data source placeholders
-        body = re.sub(
-            r"-\s*\*\*Index/Data Source:\*\*\s*\[Human to populate\]",
-            "- **Index/Data Source:** Target SIEM/EDR indexes (auditd, process execution, network)",
-            body,
-        )
-        body = re.sub(
-            r"-\s*\*\*Time Range:\*\*\s*\[Human to populate\]",
-            "- **Time Range:** Lookback 1 to 7 days",
-            body,
-        )
-        body = re.sub(
-            r"-\s*\*\*Events Analyzed:\*\*\s*0\s*\(draft\s*-\s*not yet executed\)",
-            "- **Events Analyzed:** Evaluated against baseline and live telemetry",
-            body,
-        )
-        body = re.sub(
-            r"-\s*\*\*Data Quality:\*\*\s*N/A",
-            "- **Data Quality:** Verified against sensor telemetry",
-            body,
-        )
-        # 5. Update next review footer
+        # Do NOT invent Index/Time Range/Events Analyzed text. Approve must not
+        # paper over UNVALIDATED / UNEXECUTED CHECK-KEEP stubs with boilerplate.
+        # 4. Update next review footer (draft banner only — not execution evidence)
         body = re.sub(
             r"\*\*Next Review:\*\*\s*\[Human review required before status can advance to `?in-progress`?\]",
+            f"**Reviewed:** {now_iso[:10]} {now_iso[11:19]} UTC by {actor} (approved for active hunting)",
+            body,
+        )
+        body = re.sub(
+            r"\*\*Next Review:\*\*\s*BLOCKED until CHECK is lab-validated and KEEP is closed[^\n]*",
             f"**Reviewed:** {now_iso[:10]} {now_iso[11:19]} UTC by {actor} (approved for active hunting)",
             body,
         )
@@ -501,6 +526,10 @@ def record_hunt_execution(
             f"| Finding ({now_iso[:10]}) | SIEM:{target} | {summary_txt or 'Matched activity'} |"
         )
         body = body.replace("| N/A | N/A | Draft only |", finding_row)
+        body = body.replace(
+            "| — | — | UNEXECUTED — no findings until hunt is run |",
+            finding_row,
+        )
         if "true_positives" in fm:
             body = re.sub(
                 r"\*\*True Positives:\*\*\s*\d+",
@@ -513,6 +542,13 @@ def record_hunt_execution(
                 f"**False Positives:** {fm['false_positives']}",
                 body,
             )
+    elif outcome == "clean" and matched_count == 0:
+        clean_row = "| None (Clean Sweep) | Informational | No suspicious telemetry observed across scheduled sweeps |"
+        body = body.replace("| N/A | N/A | Draft only |", clean_row)
+        body = body.replace(
+            "| — | — | UNEXECUTED — no findings until hunt is run |",
+            clean_row,
+        )
 
     new_content = f"---\n{new_yaml}---\n{body.rstrip()}\n{exec_entry}"
     write_artifact(hunt_path, new_content, workspace)

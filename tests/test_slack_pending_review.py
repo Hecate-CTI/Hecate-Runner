@@ -92,7 +92,7 @@ def test_review_hunt_approve_records_reviewer_and_keeps_body(tmp_path: Path):
 
 
 def test_approving_a_rendered_draft_removes_its_draft_markers(tmp_path: Path, sample_hypothesis):
-    """H-0021 was approved and published still titled and headed "DRAFT"."""
+    """Draft branding strips on approve; unfinished CHECK/KEEP still need override."""
     from datetime import UTC, datetime
 
     from hecate_runner.hunt_writer import DraftHuntRequest, render_draft
@@ -104,13 +104,25 @@ def test_approving_a_rendered_draft_removes_its_draft_markers(tmp_path: Path, sa
         generated_at=datetime(2026, 11, 9, tzinfo=UTC),
     )
     draft = render_draft(req)
-    assert "DRAFT - Automated Hunt Draft" in draft and "Do not execute queries" in draft
+    assert "DRAFT - Automated Hunt Draft" in draft
+    assert "Not production-ready" in draft
+    assert "UNVALIDATED" in draft and "UNEXECUTED" in draft
+    assert "publish_check: block" in draft
     hunts_dir = tmp_path / "hunts" / "2026" / "Q4"
     hunts_dir.mkdir(parents=True)
     path = hunts_dir / "H-0001.md"
     path.write_text(draft, encoding="utf-8")
 
-    review_hunt(tmp_path, "H-0001", approve=True, reviewer="slack:U1 (alice)")
+    refused = review_hunt(tmp_path, "H-0001", approve=True, reviewer="slack:U1 (alice)")
+    assert refused["ok"] is False and refused.get("needs_override") is True
+
+    review_hunt(
+        tmp_path,
+        "H-0001",
+        approve=True,
+        reviewer="slack:U1 (alice)",
+        override="Lab miss reviewed; KEEP closed offline for this fixture.",
+    )
 
     text = path.read_text(encoding="utf-8")
     fm = _frontmatter(path)
@@ -118,10 +130,12 @@ def test_approving_a_rendered_draft_removes_its_draft_markers(tmp_path: Path, sa
     assert "draft" not in fm["tags"] and "requires-human-review" not in fm["tags"]
     assert "(draft)" not in fm["hunter"]
     assert "# H-0001: Adversaries dump LSASS memory via comsvcs.dll MiniDump.\n" in text
-    assert "DRAFT" not in text
-    assert "Do not execute queries" not in text
+    assert "DRAFT /" not in text
+    assert "Not production-ready" not in text
     assert "- **Status:** active" in text
     assert "**Reviewed:** 20" in text and "by slack:U1 (alice)" in text
+    # Override does not invent execution evidence
+    assert "UNVALIDATED" in text or "UNEXECUTED" in text
 
 
 def test_rejecting_a_draft_keeps_its_draft_markers(tmp_path: Path):

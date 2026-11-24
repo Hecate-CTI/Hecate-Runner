@@ -1444,6 +1444,71 @@ def _render_siem_deployments(req: DraftHuntRequest) -> str:
     return "\n".join(lines)
 
 
+def _lab_probe_is_real(probe: dict[str, Any] | None) -> bool:
+    """True only when a non-mock provider returned a real hit/miss/overmatch."""
+    if not probe:
+        return False
+    status = str(probe.get("status") or "").strip().lower()
+    provider = str(probe.get("provider") or "").strip().lower()
+    if provider in {"", "mock"}:
+        return False
+    return status in {"hit", "miss", "overmatch"}
+
+
+def _render_check_data_sources(req: DraftHuntRequest) -> str:
+    """CHECK execution block: lab numbers when real, otherwise blatantly UNVALIDATED."""
+    probe = req.lab_probe or {}
+    if _lab_probe_is_real(probe):
+        provider = str(probe.get("provider") or "lab")
+        window = int(probe.get("window_days") or 0)
+        hits = int(probe.get("total_hits") or 0)
+        status = str(probe.get("status") or "")
+        detail = str(probe.get("detail") or "").strip()
+        quality = f"Lab probe `{status}`"
+        if detail:
+            quality = f"{quality} — {detail}"
+        return (
+            "### Data Source Information\n\n"
+            f"- **Index/Data Source:** `{provider}` (lab probe)\n"
+            f"- **Time Range:** Past {window} day(s) (lab probe)\n"
+            f"- **Events Analyzed:** {hits} (lab probe: `{status}`)\n"
+            f"- **Data Quality:** {quality}\n"
+        )
+    reason = ""
+    if probe.get("status"):
+        reason = (
+            f" Last probe: `{probe.get('status')}`"
+            f" via `{probe.get('provider') or 'unknown'}`"
+            f" — mock/skipped/error does not count."
+        )
+    return (
+        "### Data Source Information\n\n"
+        "> **UNVALIDATED — not production-ready.**\n"
+        "> CHECK is closed only after a real lab/SIEM probe (not mock).\n"
+        f">{reason}\n"
+        "- **Index/Data Source:** UNVALIDATED — no real lab probe\n"
+        "- **Time Range:** UNVALIDATED — no real lab probe\n"
+        "- **Events Analyzed:** UNVALIDATED — 0 (no real execution)\n"
+        "- **Data Quality:** UNVALIDATED\n"
+    )
+
+
+def _render_keep_section(req: DraftHuntRequest) -> str:
+    """KEEP stays explicitly UNEXECUTED until a human closes findings after a run."""
+    _ = req  # reserved for future auto-suggest from lab miss
+    return (
+        "## KEEP: Findings & Response\n\n"
+        "### Executive Summary\n\n"
+        "> **UNEXECUTED — KEEP is empty until a human closes findings after a real run.**\n\n"
+        "### Findings\n\n"
+        "| **Finding** | **Ticket** | **Description** |\n"
+        "|-------------|-----------|-----------------|\n"
+        "| — | — | UNEXECUTED — no findings until hunt is run |\n\n"
+        "**True Positives:** —\n"
+        "**False Positives:** —\n"
+    )
+
+
 def _render_lab_probe(req: DraftHuntRequest) -> str:
     """Render draft-time lab SIEM hit/miss next to hunting queries."""
     probe = req.lab_probe or {}
@@ -1461,6 +1526,11 @@ def _render_lab_probe(req: DraftHuntRequest) -> str:
         f"- **Window:** {window} day(s)",
         f"- **Result:** `{status}`" + (f" — {detail}" if detail else ""),
     ]
+    if not _lab_probe_is_real(probe):
+        lines.append(
+            "- **Readiness:** UNVALIDATED — this probe does not satisfy CHECK "
+            "(mock / skipped / error)"
+        )
     results = probe.get("results") or []
     if isinstance(results, list) and results:
         lines.append("")
@@ -1505,86 +1575,10 @@ def render_draft(req: DraftHuntRequest) -> str:
     data_sources = hyp.data_sources
     from hecate_agent.core.publish_check import evaluate_hunt
 
-    publish = evaluate_hunt(
-        "",
-        [
-            (str(rule.get("title") or "rule"), str(rule.get("rule_yaml") or ""))
-            for rule in req.sigma_rules
-            if str(rule.get("rule_yaml") or "").strip()
-        ],
-    )
-
     def bullets(items: list[str]) -> str:
         return "\n".join(f"- {i}" for i in items) if items else "- [TBD]"
 
-    # YAML frontmatter — list fields serialized with json.dumps to get valid quoting
-    frontmatter = (
-        "---\n"
-        f"hunt_id: {req.hunt_id}\n"
-        f"title: {_title_scalar(hyp.hypothesis)}\n"
-        "status: planning\n"
-        f"date: {req.generated_at.strftime('%Y-%m-%d')}\n"
-        "hunter: hecate-runner orchestrator (draft)\n"
-        f"platform: {json.dumps(platforms)}\n"
-        f"tactics: {json.dumps(tactics)}\n"
-        f"techniques: {json.dumps(techniques)}\n"
-        f"data_sources: {json.dumps(data_sources)}\n"
-        + (f"spawned_from: {req.research_id}\n" if req.research_id else "")
-        + f"related_hunts: {json.dumps(req.related_hunts)}\n"
-        "findings_count: 0\n"
-        "true_positives: 0\n"
-        "false_positives: 0\n"
-        "customer_deliverables: []\n"
-        f"tags: {json.dumps(_draft_tags(hyp.is_threat_report, hyp.is_indicator_only))}\n"
-        f"publish_check: {publish.verdict}\n"
-        f"publish_findings: {json.dumps([item.to_dict() for item in publish.findings])}\n"
-        + (
-            f"lab_probe: {req.lab_probe.get('status')}\n"
-            f"lab_probe_provider: {json.dumps(req.lab_probe.get('provider') or '')}\n"
-            f"lab_probe_window_days: {int(req.lab_probe.get('window_days') or 0)}\n"
-            f"lab_probe_hits: {int(req.lab_probe.get('total_hits') or 0)}\n"
-            f"lab_probe_queries: {int(req.lab_probe.get('queries_run') or 0)}\n"
-            f"lab_probe_detail: {json.dumps(req.lab_probe.get('detail') or '')}\n"
-            f"lab_probe_results: {json.dumps(req.lab_probe.get('results') or [])}\n"
-            if req.lab_probe.get("status")
-            else ""
-        )
-        + (
-            # Every evaluated rule, not any: H-0016 read "validated" with 2 of 12.
-            f"purple_team_validated: {str(req.purple_team_rules_validated == req.purple_team_rules_evaluated).lower()}\n"
-            f"purple_team_rules_evaluated: {req.purple_team_rules_evaluated}\n"
-            f"purple_team_rules_validated: {req.purple_team_rules_validated}\n"
-            f"purple_team_rules_replay_matched: {req.purple_team_rules_replay_matched}\n"
-            f"purple_team_rules_tuned: {req.purple_team_rules_tuned}\n"
-            f"purple_team_telemetry_events: {req.purple_team_telemetry_count}\n"
-            if req.purple_team_rules_evaluated > 0
-            else ""
-        )
-        + (
-            (
-                f"bas_verified: {str(confirms_technique(req.bas_verification)).lower()}\n"
-                if req.bas_verification.get("status") != "skipped"
-                else ""
-            )
-            + f"bas_run_id: {json.dumps(req.bas_verification.get('run_id', ''))}\n"
-            f"bas_provider: {json.dumps(req.bas_verification.get('provider', ''))}\n"
-            f"bas_status: {json.dumps(result_status(req.bas_verification))}\n"
-            f"bas_backend: {json.dumps(req.bas_verification.get('backend', ''))}\n"
-            f"bas_fidelity_scope: {json.dumps(result_fidelity_scope(req.bas_verification))}\n"
-            f"bas_cleanup_success: {str(req.bas_verification.get('cleanup_success') is True).lower()}\n"
-            f"bas_verification_scope: {json.dumps(req.bas_verification.get('verification_scope', ''))}\n"
-            f"bas_type: {json.dumps('synthesized_probe' if (req.bas_verification.get('provider') == 'mock' or req.bas_verification.get('mock_fallback') or req.bas_verification.get('backend') == 'mock' or result_status(req.bas_verification) == 'simulation_match') else 'live_detonation')}\n"
-            f"bas_live: {str(not (req.bas_verification.get('provider') == 'mock' or req.bas_verification.get('mock_fallback') or req.bas_verification.get('backend') == 'mock' or result_status(req.bas_verification) in {'simulation_match', 'skipped', 'smoke_check_match'})).lower()}\n"
-            f"bas_detection_triggered: {str(bool(req.bas_verification.get('rule_triggered'))).lower()}\n"
-            f"bas_rules_evaluated: {req.bas_rules_evaluated}\n"
-            f"bas_rules_validated: {req.bas_rules_validated if confirms_technique(req.bas_verification) else 0}\n"
-            f"bas_matched_events: {req.bas_matched_events}\n"
-            if req.bas_verification
-            else ""
-        )
-        + "---\n\n"
-    )
-
+    readiness = "lab_validated" if _lab_probe_is_real(req.lab_probe) else "unvalidated"
     low_confidence_banner = (
         (
             "\n> **🚩 LOW-CONFIDENCE SOURCE:** The hypothesis-generator judged that the source CTI "
@@ -1597,18 +1591,13 @@ def render_draft(req: DraftHuntRequest) -> str:
     )
 
     # OBSERVE mirrors the three subsections of Hecate's own HUNT_LOCK template.
-    # It previously carried a fourth, "Known False Positives", and left "What
-    # Normal Looks Like" as "[Human review required]" -- but the template
-    # defines that section as "legitimate activity that might trigger false
-    # positives", which is exactly what hyp.false_positives holds. So the most
-    # useful section in the block sat empty while its content was rendered
-    # under an invented heading below it. "Expected Observables" likewise
-    # repeated hyp.observables verbatim from "What Suspicious Looks Like"; it
-    # now carries only what is actually distinct, the data sources.
+    # CHECK/KEEP stay honest: no fake "Human to populate" that looks half-done,
+    # and no empty KEEP dressed as a finished findings form.
     body = f"""# {req.hunt_id}: DRAFT - Automated Hunt Draft
 
-> **⚠️ This hunt was auto-generated by hecate-runner.**
-> **Do not execute queries until a human reviews the Learn/Observe sections and advances the status.**
+> **⚠️ DRAFT / {readiness.upper()} — auto-generated by hecate-runner.**
+> **Not production-ready.** Do not treat this as an executed hunt. Advance only after
+> LEARN/OBSERVE review, a real lab probe, and a closed KEEP.
 {low_confidence_banner}
 
 **Hunt Metadata**
@@ -1616,6 +1605,7 @@ def render_draft(req: DraftHuntRequest) -> str:
 - **Date:** {req.generated_at.strftime("%Y-%m-%d")}
 - **Hunter:** hecate-runner orchestrator (draft)
 - **Status:** planning
+- **Readiness:** {readiness}
 - **MITRE ATT&CK:** {techniques_display}
 
 ---
@@ -1687,13 +1677,7 @@ Source CTI:
 
 ## CHECK: Execute & Analyze
 
-### Data Source Information
-
-- **Index/Data Source:** [Human to populate]
-- **Time Range:** [Human to populate]
-- **Events Analyzed:** 0 (draft - not yet executed)
-- **Data Quality:** N/A
-
+{_render_check_data_sources(req)}
 {_render_detection_guidance(req)}### Hunting Queries
 
 {_render_sigma_section(req)}{_render_review_gaps(req)}
@@ -1703,26 +1687,89 @@ Source CTI:
 {_render_siem_deployments(req)}
 ---
 
-## KEEP: Findings & Response
-
-### Executive Summary
-
-[To be completed after human review and execution]
-
-### Findings
-
-| **Finding** | **Ticket** | **Description** |
-|-------------|-----------|-----------------|
-| N/A | N/A | Draft only |
-
-**True Positives:** 0
-**False Positives:** 0
-{_render_soc_triage_playbook(req)}
+{_render_keep_section(req)}{_render_soc_triage_playbook(req)}
 ---
 
 **Draft Created:** {req.generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")} by hecate-runner
-**Next Review:** [Human review required before status can advance to `in-progress`]
+**Next Review:** BLOCKED until CHECK is lab-validated and KEEP is closed (not a draft stub)
 """
+
+    rules = [
+        (str(rule.get("title") or "rule"), str(rule.get("rule_yaml") or ""))
+        for rule in req.sigma_rules
+        if str(rule.get("rule_yaml") or "").strip()
+    ]
+    # Evaluate the LOCK body so incompleteness (UNVALIDATED/UNEXECUTED) blocks publish.
+    publish = evaluate_hunt(body, rules)
+
+    # YAML frontmatter — list fields serialized with json.dumps to get valid quoting
+    frontmatter = (
+        "---\n"
+        f"hunt_id: {req.hunt_id}\n"
+        f"title: {_title_scalar(hyp.hypothesis)}\n"
+        "status: planning\n"
+        f"readiness: {readiness}\n"
+        f"date: {req.generated_at.strftime('%Y-%m-%d')}\n"
+        "hunter: hecate-runner orchestrator (draft)\n"
+        f"platform: {json.dumps(platforms)}\n"
+        f"tactics: {json.dumps(tactics)}\n"
+        f"techniques: {json.dumps(techniques)}\n"
+        f"data_sources: {json.dumps(data_sources)}\n"
+        + (f"spawned_from: {req.research_id}\n" if req.research_id else "")
+        + f"related_hunts: {json.dumps(req.related_hunts)}\n"
+        "findings_count: 0\n"
+        "true_positives: 0\n"
+        "false_positives: 0\n"
+        "customer_deliverables: []\n"
+        f"tags: {json.dumps(_draft_tags(hyp.is_threat_report, hyp.is_indicator_only))}\n"
+        f"publish_check: {publish.verdict}\n"
+        f"publish_findings: {json.dumps([item.to_dict() for item in publish.findings])}\n"
+        + (
+            f"lab_probe: {req.lab_probe.get('status')}\n"
+            f"lab_probe_provider: {json.dumps(req.lab_probe.get('provider') or '')}\n"
+            f"lab_probe_window_days: {int(req.lab_probe.get('window_days') or 0)}\n"
+            f"lab_probe_hits: {int(req.lab_probe.get('total_hits') or 0)}\n"
+            f"lab_probe_queries: {int(req.lab_probe.get('queries_run') or 0)}\n"
+            f"lab_probe_detail: {json.dumps(req.lab_probe.get('detail') or '')}\n"
+            f"lab_probe_results: {json.dumps(req.lab_probe.get('results') or [])}\n"
+            if req.lab_probe.get("status")
+            else ""
+        )
+        + (
+            # Every evaluated rule, not any: H-0016 read "validated" with 2 of 12.
+            f"purple_team_validated: {str(req.purple_team_rules_validated == req.purple_team_rules_evaluated).lower()}\n"
+            f"purple_team_rules_evaluated: {req.purple_team_rules_evaluated}\n"
+            f"purple_team_rules_validated: {req.purple_team_rules_validated}\n"
+            f"purple_team_rules_replay_matched: {req.purple_team_rules_replay_matched}\n"
+            f"purple_team_rules_tuned: {req.purple_team_rules_tuned}\n"
+            f"purple_team_telemetry_events: {req.purple_team_telemetry_count}\n"
+            if req.purple_team_rules_evaluated > 0
+            else ""
+        )
+        + (
+            (
+                f"bas_verified: {str(confirms_technique(req.bas_verification)).lower()}\n"
+                if req.bas_verification.get("status") != "skipped"
+                else ""
+            )
+            + f"bas_run_id: {json.dumps(req.bas_verification.get('run_id', ''))}\n"
+            f"bas_provider: {json.dumps(req.bas_verification.get('provider', ''))}\n"
+            f"bas_status: {json.dumps(result_status(req.bas_verification))}\n"
+            f"bas_backend: {json.dumps(req.bas_verification.get('backend', ''))}\n"
+            f"bas_fidelity_scope: {json.dumps(result_fidelity_scope(req.bas_verification))}\n"
+            f"bas_cleanup_success: {str(req.bas_verification.get('cleanup_success') is True).lower()}\n"
+            f"bas_verification_scope: {json.dumps(req.bas_verification.get('verification_scope', ''))}\n"
+            f"bas_type: {json.dumps('synthesized_probe' if (req.bas_verification.get('provider') == 'mock' or req.bas_verification.get('mock_fallback') or req.bas_verification.get('backend') == 'mock' or result_status(req.bas_verification) == 'simulation_match') else 'live_detonation')}\n"
+            f"bas_live: {str(not (req.bas_verification.get('provider') == 'mock' or req.bas_verification.get('mock_fallback') or req.bas_verification.get('backend') == 'mock' or result_status(req.bas_verification) in {'simulation_match', 'skipped', 'smoke_check_match'})).lower()}\n"
+            f"bas_detection_triggered: {str(bool(req.bas_verification.get('rule_triggered'))).lower()}\n"
+            f"bas_rules_evaluated: {req.bas_rules_evaluated}\n"
+            f"bas_rules_validated: {req.bas_rules_validated if confirms_technique(req.bas_verification) else 0}\n"
+            f"bas_matched_events: {req.bas_matched_events}\n"
+            if req.bas_verification
+            else ""
+        )
+        + "---\n\n"
+    )
     prose_sources = [
         req.threat_intel,
         hyp.hypothesis,
