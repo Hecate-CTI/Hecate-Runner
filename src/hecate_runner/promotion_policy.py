@@ -237,7 +237,11 @@ def evaluate_promotion(
             not skipped
             and not synthetic
             and metadata.get("bas_verified") is False
-            and (bas_live or bas_provider in {"caldera", "stratus"} or bas_status in {"failed", "failure"})
+            and (
+                bas_live
+                or bas_provider in {"caldera", "stratus"}
+                or bas_status in {"failed", "failure"}
+            )
         ):
             apply(
                 str(risk["bas_failed"]),

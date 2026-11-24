@@ -373,9 +373,7 @@ def _finalize_approved_body(
         1,
     )
     content = content.replace("- **Status:** planning\n", "- **Status:** active\n", 1)
-    reviewed = (
-        f"**Reviewed:** {reviewed_at.strftime('%Y-%m-%d %H:%M:%S UTC')} by {reviewer}"
-    )
+    reviewed = f"**Reviewed:** {reviewed_at.strftime('%Y-%m-%d %H:%M:%S UTC')} by {reviewer}"
     content = content.replace(
         "**Next Review:** [Human review required before status can advance to `in-progress`]",
         reviewed,

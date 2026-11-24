@@ -99,7 +99,9 @@ def test_promotion_policy_blocks_on_bas_failure(tmp_path: Path) -> None:
 def test_promotion_policy_ignores_skipped_bas(tmp_path: Path) -> None:
     workspace = _setup_test_workspace(tmp_path, bas_verified=False, bas_status="skipped")
     hunt = workspace / "hunts" / "2026" / "Q4" / "H-0010.md"
-    text = hunt.read_text(encoding="utf-8").replace("bas_verified: false", "bas_verified: false\nbas_live: false")
+    text = hunt.read_text(encoding="utf-8").replace(
+        "bas_verified: false", "bas_verified: false\nbas_live: false"
+    )
     # Remove bas_verified so skipped looks like a normal optional skip
     text = text.replace("bas_verified: false\n", "")
     hunt.write_text(text, encoding="utf-8")
@@ -110,9 +112,7 @@ def test_promotion_policy_ignores_skipped_bas(tmp_path: Path) -> None:
 def test_promotion_policy_ignores_mock_bas_failure(tmp_path: Path) -> None:
     workspace = _setup_test_workspace(tmp_path, bas_verified=False, bas_status="simulation_match")
     hunt = workspace / "hunts" / "2026" / "Q4" / "H-0010.md"
-    text = hunt.read_text(encoding="utf-8").replace(
-        'bas_provider: caldera', 'bas_provider: mock'
-    )
+    text = hunt.read_text(encoding="utf-8").replace("bas_provider: caldera", "bas_provider: mock")
     hunt.write_text(text, encoding="utf-8")
     decision = evaluate_promotion(workspace, "H-0010")
     assert not any("adversary emulation" in r for r in decision.reasons)

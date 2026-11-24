@@ -236,7 +236,9 @@ def build_draft_card(result: RunResult, *, interactive: bool = False) -> list[di
             elif bas_ver and bas_prov:
                 bas_text = f"✅ *{bas_prov.upper()}* live detonation verified"
             elif bas_prov:
-                bas_text = f"⚠️ *{bas_prov.upper()}* live run not verified (`{bas_status or 'unknown'}`)"
+                bas_text = (
+                    f"⚠️ *{bas_prov.upper()}* live run not verified (`{bas_status or 'unknown'}`)"
+                )
             elif bas_ver:
                 bas_text = "✅ Live detonation verified"
             else:

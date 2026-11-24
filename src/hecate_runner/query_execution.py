@@ -621,7 +621,9 @@ class SplunkQueryProvider(QueryProvider):
         if not host:
             errors.append("SPLUNK_HOST missing from environment and workspace .env")
         if not token and not password:
-            errors.append("SPLUNK_TOKEN/SPLUNK_PASSWORD missing from environment and workspace .env")
+            errors.append(
+                "SPLUNK_TOKEN/SPLUNK_PASSWORD missing from environment and workspace .env"
+            )
         return errors
 
     def execute(self, query: ProposedQuery) -> QueryResult:
