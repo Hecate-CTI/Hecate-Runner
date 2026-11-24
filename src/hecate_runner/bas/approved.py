@@ -3,6 +3,12 @@
 Technique IDs alone are not an execution policy: CALDERA may map a technique
 to downloads, payloads, or commands containing facts from intelligence. Pin the
 ability and inspect its executable content before allowing it to run.
+
+Catalog scope is intentional: these are general Linux discovery / canary
+commands. Application-CVE Sigma rules that need product-specific predicates
+should skip BAS rather than earn credit from an unrelated procedure. See
+docs/BAS_AUTOMATION.md ("Honesty: BAS skip vs Sigma coverage") for the
+policy and the future application-scoped expansion milestone.
 """
 
 from __future__ import annotations

@@ -58,6 +58,43 @@ unavailable live execution fails. Explicitly enabled fallback is a synthetic
 probe with mock provenance; it cannot become live technique/alert proof. Windows
 and cloud unattended automation remain unsupported.
 
+## Honesty: BAS skip vs Sigma coverage
+
+Most published hunts target application-level CVEs and product telemetry
+(Erlang cluster auth bypass, SIP stacks, WordPress upgrade paths, crafted HTTP
+Authorization headers, and similar). The pinned catalog is general Linux
+discovery and reconnaissance (`whoami`, `ps`, `uname`, loopback canaries). A
+Sigma rule that requires those application predicates **must not** earn live
+BAS credit from an unrelated discovery command.
+
+A BAS skip on such a hunt is therefore the correct outcome under the honesty
+policy: technique tags and procedure names are not a claim that the rule was
+exercised. Detection verification for those hunts comes from Layer 1 synthetic
+replay (including holdouts) and live SIEM lab probes / sweeps — not from forcing
+a catalog match.
+
+Do not widen eligibility, invent predicates, or restore mock credit to close
+this gap. Closing it is a deliberate engineering milestone (below), not a
+configuration toggle.
+
+### Future milestone: application-scoped procedures
+
+When expanding coverage, treat it as a dedicated initiative — not incremental
+catalog drift:
+
+1. Author **3–5** reviewed, managed abilities that are loopback-bound or
+   in-container only (for example: local web-worker probes, mock service
+   handshakes, inert HTTP Authorization canaries).
+2. Pin exact commands, cleanup, expected files, and `fidelity_scope` in
+   `approved.py`; install via `bas-install-procedures`.
+3. Require independent sensor observation and Sigma predicate match before
+   `confirms_technique` credit — same path as today's behavioral procedures.
+4. Prefer hunts whose rules already use Linux `process_creation` /
+   `network_connection` categories that a safe local probe can honestly hit.
+
+Until that work ships, keep current skip behavior. Expanding the catalog without
+predicate fidelity would reintroduce the theater this policy removed.
+
 ## Real process observation
 
 The agent image runs Sandcat under `strace`. `lab_process` evaluates successful
