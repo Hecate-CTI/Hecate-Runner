@@ -102,5 +102,5 @@ checks returned proposals and rejected YAML already in the query directory befor
 replay, BAS, transpilation, deployment and lab queries. Discarded proposals and
 native siblings are removed from that directory, with private evidence retained in
 `.hecate/rejected-rules/`. Drafts list the discarded proposals and their reasons;
-accepted-rule metrics exclude them. `revise` remains an explicitly labeled draft
-for analyst review; it is not a rejection or validation pass.
+accepted-rule metrics exclude them. `revise` is also held back until a corrected candidate passes review. It remains
+available as a diagnostic proposal, not an accepted or validated rule.

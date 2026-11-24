@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from hecate_agent.core.sigma_review_policy import review_rejection_reason
+from hecate_agent.core.sigma_review_policy import review_block_reason
 
 from hecate_runner.atomic_write import atomic_write_text
 from hecate_runner.workspace_paths import read_artifact, workspace_path
@@ -44,7 +44,7 @@ def discard_rejected_rules(
 
     for rule in rules:
         doc = parse(str(rule.get("rule_yaml") or ""))
-        reason = review_rejection_reason(doc)
+        reason = review_block_reason(doc)
         if reason:
             title = str(rule.get("title") or doc.get("title") or "Untitled rule")
             rejected.append({"title": title, "reason": reason})
@@ -62,7 +62,7 @@ def discard_rejected_rules(
         if path in kept_paths:
             continue
         doc = parse(read_artifact(path, workspace))
-        reason = review_rejection_reason(doc)
+        reason = review_block_reason(doc)
         if reason:
             discarded_paths.add(path)
             title = str(doc.get("title") or path.stem)

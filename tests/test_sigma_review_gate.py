@@ -123,3 +123,15 @@ def test_routing_override_is_forwarded_to_isolated_workers(settings):
     assert json.loads(settings.env_for_hecate()["HECATE_LLM_CAPABILITY_TIERS"]) == {
         "source_extraction": "complex"
     }
+
+
+def test_revision_required_proposal_is_held_back_with_its_native_query(tmp_path):
+    out_dir = tmp_path / "queries/H-0040"
+    out_dir.mkdir(parents=True)
+    proposal = rule(out_dir, "unfinished", "revise")
+    accepted, held = discard_rejected_rules(
+        [proposal], workspace=tmp_path, out_dir=out_dir, hunt_id="H-0040"
+    )
+    assert not accepted
+    assert held[0]["reason"].startswith("Revision required:")
+    assert not list(out_dir.iterdir())
