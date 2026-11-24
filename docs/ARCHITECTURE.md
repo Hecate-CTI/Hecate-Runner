@@ -88,3 +88,19 @@ provided via `scripts/setup-services.sh`. Secrets, private run JSON, traces and
 local databases remain outside public Git. See [services](SERVICES.md) and
 [service isolation](SERVICE_ISOLATION.md). Restart services and reopen monitors
 after updating their code or environment.
+
+### Rejected Sigma proposals
+
+A reviewer `reject` verdict excludes a proposal even when its explanation lacks a
+verified source quote. Quote verification records evidence quality; it does not
+control whether rejection is enforced. Exhausted generation retries cannot return
+an invalid last candidate as an accepted rule. A rejected proposal is not accepted
+through an automatic platform-label change; a corrected candidate must pass review.
+
+Core filters proposals before returning/writing artifacts. Runner independently
+checks returned proposals and rejected YAML already in the query directory before
+replay, BAS, transpilation, deployment and lab queries. Discarded proposals and
+native siblings are removed from that directory, with private evidence retained in
+`.hecate/rejected-rules/`. Drafts list the discarded proposals and their reasons;
+accepted-rule metrics exclude them. `revise` is also held back until a corrected candidate passes review. It remains
+available as a diagnostic proposal, not an accepted or validated rule.

@@ -37,6 +37,8 @@ uv build --wheel --out-dir "$runtime_stage/wheels" "$core_root"
 uv build --wheel --out-dir "$runtime_stage/wheels" "$runner_root"
 uv pip install --no-config --python "$runtime_stage/venv/bin/python" --no-deps "$runtime_stage"/wheels/*.whl
 "$runtime_stage/venv/bin/python" -I -c 'import hecate_agent.api, hecate_runner.cli; print("Service runtime imports passed")'
+HECATE_SERVICE_ISOLATED=1 PYTHON_DOTENV_DISABLED=1 \
+    "$runtime_stage/venv/bin/python" -I -m hecate_runner.runtime_contract > "$runtime_stage/runtime-contract.json"
 "$runtime_stage/venv/bin/python" -I - "$core_root" "$runner_root" "$runtime_stage" <<'PYTHON'
 import hashlib
 import importlib.metadata

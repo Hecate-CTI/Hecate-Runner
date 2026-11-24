@@ -41,6 +41,7 @@ class DraftHuntRequest:
     # generation failure degrades to the old behavior rather than to a hunt
     # that looks like it has queries and does not.
     sigma_rules: list[dict[str, Any]] = field(default_factory=list)
+    sigma_rejections: list[dict[str, str]] = field(default_factory=list)
     sigma_rule_dir: str = ""
     #: Rendered grounding audit (see grounding.py). Empty renders nothing, so
     #: a draft written before the audit runs is simply missing the section
@@ -453,6 +454,22 @@ def _clean_rule_yaml_for_display(rule_yaml: str) -> str:
         log.debug("YAML load error during provenance strip: %s", exc)
     cleaned = re.sub(r"(?m)^hecate_provenance:\s*\n(^(?:  |-|\s).*\n)*", "", rule_yaml)
     return cleaned.rstrip()
+
+
+def _render_sigma_rejections(req: DraftHuntRequest) -> str:
+    if not req.sigma_rejections:
+        return ""
+    rows = [
+        "### Discarded Rule Proposals",
+        "",
+        "These proposals were excluded from replay, BAS, native query generation and deployment.",
+        "",
+    ]
+    for row in req.sigma_rejections:
+        title = _cell(row.get("title") or "Generated proposal")
+        reason = _cell(row.get("reason") or "Rejected during automated review")
+        rows.append(f"- **{title}:** {reason}")
+    return "\n".join(rows) + "\n\n"
 
 
 def _render_sigma_section(req: DraftHuntRequest) -> str:
@@ -1684,7 +1701,7 @@ Source CTI:
 {_render_check_data_sources(req)}
 {_render_detection_guidance(req)}### Hunting Queries
 
-{_render_sigma_section(req)}{_render_review_gaps(req)}
+{_render_sigma_rejections(req)}{_render_sigma_section(req)}{_render_review_gaps(req)}
 {_render_atomic_tests(techniques, platforms=req.platforms)}
 {_render_bas_verification(req)}
 {_render_lab_probe(req)}

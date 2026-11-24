@@ -530,6 +530,15 @@ class OrchestratorRulesMixin:
                     payload, out_dir, timeout_sec=self.settings.sigma_timeout_sec
                 )
                 measured.set_usage(result.usage)
+                from hecate_runner.sigma_review_gate import discard_rejected_rules
+
+                result.rules, discarded = discard_rejected_rules(
+                    result.rules,
+                    workspace=self.settings.hecate_workspace,
+                    out_dir=out_dir,
+                    hunt_id=req.hunt_id,
+                )
+                req.sigma_rejections.extend(discarded)
                 if not result.success or not result.rules:
                     measured.set_status("partial")
         except HecateError as exc:
@@ -546,6 +555,12 @@ class OrchestratorRulesMixin:
             )
             return
 
+        req.review_gaps = result.review_gaps
+        req.sigma_rejections.extend(
+            {"title": "Generated proposal", "reason": reason}
+            for reason in result.rejected
+            if not any(row["reason"] == reason for row in req.sigma_rejections)
+        )
         real_rejections = [
             r for r in result.rejected if "no rule returned" not in r and "unsupported" not in r
         ]
@@ -576,6 +591,9 @@ class OrchestratorRulesMixin:
                 req.hunt_id,
                 result.error or "no rules returned",
             )
+            if req.sigma_rejections:
+                req.sigma_rules = []
+                atomic_write_text(path, render_draft(req))
             return
 
         if result.review_gaps:
@@ -591,6 +609,16 @@ class OrchestratorRulesMixin:
                     listing([str(r.get("title", "")) for r in pass2_rules]),
                 )
 
+        result.rules, discarded = discard_rejected_rules(
+            result.rules,
+            workspace=self.settings.hecate_workspace,
+            out_dir=out_dir,
+            hunt_id=req.hunt_id,
+        )
+        req.sigma_rejections.extend(discarded)
+        if not result.rules:
+            atomic_write_text(path, render_draft(req))
+            return
         if self.settings.purple_team_validation_enabled:
             self._run_purple_team_validation(req, result.rules, out_dir, item)
 

@@ -186,6 +186,10 @@ read-only ATT&CK data and local writer outbox access in the service mount
 namespaces. It restores the previous runtime if activation or a check fails.
 The prepared stage records source commits, wheel hashes and exact dependencies
 in `release-manifest.json`; commit source changes before preparing a stage. The check does not publish queued content remotely.
+Builds and updates also run `python -I -m hecate_runner.runtime_contract` against
+the candidate packages. This offline check verifies rejection/revision filtering,
+removal of blocked native queries, macOS platform scope and capability routing.
+A missing or regressed protection stops the update before services are drained.
 Mount-namespace probes do not inherit an existing service's syscall filters.
 Before relying on publication, exercise local outbox initialization through an
 actual hardened service as well. The Linux regression suite also applies a real

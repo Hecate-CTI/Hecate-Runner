@@ -53,7 +53,7 @@ jobs:
       - name: Checkout Hecate-Core (sibling dependency for hecate-agent)
         uses: actions/checkout@v5
         with:
-          repository: Hecate-Org/Hecate-Core
+          repository: Hecate-CTI/Hecate-Core
           ref: ${{ vars.HECATE_CORE_REF || 'main' }}
           path: .hecate-core-checkout
           ssh-key: ${{ secrets.HECATE_CORE_DEPLOY_KEY }}
@@ -83,3 +83,9 @@ jobs:
 
       - name: pytest
         run: uv run pytest -v
+
+      - name: Verify combined runtime protections offline
+        env:
+          HECATE_SERVICE_ISOLATED: "1"
+          PYTHON_DOTENV_DISABLED: "1"
+        run: uv run python -I -m hecate_runner.runtime_contract
