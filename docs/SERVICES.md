@@ -97,3 +97,18 @@ sudo python3 scripts/update-service-runtime.py --runtime-stage /tmp/hecate-runti
 rm -rf /tmp/hecate-runtime-stage
 ```
 Snapshots of prior runtimes are saved in `/var/backups/hecate-service-isolation/`.
+
+### Update models with a runtime release
+
+The isolated runtime updater can change the cloud model and extraction routing in
+the same drained update. For example, pass `--complex-model anthropic/claude-sonnet-4-6`
+and `--source-extraction-tier complex` alongside `--runtime-stage /path/to/prepared-stage`.
+The local backend and other capability routes are preserved. Private configuration
+backups are retained with the runtime recovery snapshot. Failed startup or routing
+checks restore both the previous runtime and the previous environment files.
+Model-routing canaries are offline; they do not send API requests.
+
+`HECATE_LLM_CAPABILITY_TIERS` is a JSON object, for example
+`{"source_extraction":"complex"}`. Runner forwards it to isolated API workers.
+These overrides retain the existing restrictions on moving critical work to the
+simple tier. Invalid mappings fail explicitly.

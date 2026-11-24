@@ -111,6 +111,11 @@ class Settings(BaseSettings):
         default=None,
         alias="HECATE_LLM_SIMPLE_BASE_URL",
     )
+    hecate_llm_capability_tiers: dict[str, Literal["simple", "complex"]] | None = Field(
+        default=None,
+        alias="HECATE_LLM_CAPABILITY_TIERS",
+        description="Explicit capability routing overrides; complex-tier demotion gates still apply.",
+    )
     hecate_llm_complex_provider: str | None = Field(
         default=None,
         alias="HECATE_LLM_COMPLEX_PROVIDER",
@@ -1800,6 +1805,10 @@ class Settings(BaseSettings):
             value = getattr(self, attr, None)
             if value:
                 env[env_key] = value
+        if self.hecate_llm_capability_tiers is not None:
+            env["HECATE_LLM_CAPABILITY_TIERS"] = json.dumps(
+                self.hecate_llm_capability_tiers, sort_keys=True
+            )
         return env
 
     def redacted_dict(self) -> dict[str, Any]:
