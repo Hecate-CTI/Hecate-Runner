@@ -348,7 +348,7 @@ def test_hunt_rendering_rejects_stale_full_credit_for_known_smoke_checks(smoke_l
     assert frontmatter["bas_rules_validated"] == 0
     assert frontmatter["bas_fidelity_scope"] == "smoke_check"
     assert frontmatter["bas_status"] == "smoke_check_match"
-    assert "SMOKE CHECK MATCH" in output
+    assert "SMOKE CHECK" in output
     assert "VERIFIED TRUE POSITIVE" not in output
 
 

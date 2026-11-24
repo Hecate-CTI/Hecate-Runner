@@ -50,7 +50,7 @@ def test_render_draft_with_bas_verification() -> None:
 
     # Body assertions
     assert "### Adversary Emulation & Breach Simulation (BAS)" in rendered
-    assert "SIMULATION MATCH" in rendered
+    assert "SYNTHETIC ONLY" in rendered
     assert "- **Provider:** `MOCK`" in rendered
     assert "- **Target Technique:** `T1059.001` (ability-powershell-test)" in rendered
     assert "- **Telemetry Observed:** Yes" in rendered

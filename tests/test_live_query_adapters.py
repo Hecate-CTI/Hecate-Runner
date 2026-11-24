@@ -304,6 +304,7 @@ def test_doctor_identifies_live_provider_and_missing_configuration(settings, mon
 
 def test_local_dotenv_credentials_reach_adapter(tmp_path, monkeypatch, transport):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("HECATE_RUNNER_QUERY_PROVIDER", raising=False)
     (tmp_path / ".env").write_text(
         "HECATE_RUNNER_QUERY_PROVIDER=elastic\nELASTIC_URL=https://es.test\n"
         "ELASTIC_INDEX=logs-*\nELASTIC_API_KEY=local-test-secret\n"

@@ -41,11 +41,13 @@ def cli_env(workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         "TAVILY_API_KEY",
         "HECATE_RUNNER_RESEARCH_ENABLED",
         "HECATE_RUNNER_SLACK_WEBHOOK_URL",
-        "HECATE_RUNNER_QUERY_PROVIDER",
         "SPLUNK_HOST",
         "SPLUNK_TOKEN",
     ]:
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HECATE_RUNNER_ALLOW_MOCK", "true")
+    monkeypatch.setenv("HECATE_RUNNER_QUERY_PROVIDER", "mock")
+    monkeypatch.setenv("HECATE_BAS_MODE", "mock")
     monkeypatch.setenv("HECATE_WORKSPACE", str(workspace))
     monkeypatch.setenv("HECATE_RUNNER_MAX_DRAFTS_PER_DAY", "4")
     # doctor's RSS check is unconditional; keep it satisfied unless a test
