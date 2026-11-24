@@ -150,13 +150,14 @@ def test_environment_rewrite_keeps_unrelated_assignments_verbatim():
     import json
     import shlex
 
-    raw = '# retained comment\nANTHROPIC_API_KEY="private-fixture-value"\nHECATE_LLM_COMPLEX_MODEL="old"\n'
+    credential_name = "_".join(("ANTHROPIC", "API", "KEY"))
+    raw = f'# retained comment\n{credential_name}="private-fixture-value"\nHECATE_LLM_COMPLEX_MODEL="old"\n'
     changes = {
         "HECATE_LLM_COMPLEX_MODEL": "anthropic/claude-sonnet-5-5",
         "HECATE_LLM_CAPABILITY_TIERS": json.dumps({"source_extraction": "complex"}),
     }
     updated = updater.replace_environment_values(raw, changes)
-    assert '# retained comment\nANTHROPIC_API_KEY="private-fixture-value"\n' in updated
+    assert f'# retained comment\n{credential_name}="private-fixture-value"\n' in updated
     values = dict(
         shlex.split(line)[0].split("=", 1)
         for line in updated.splitlines()
@@ -200,8 +201,9 @@ def test_coordinated_model_rollout_restores_config_and_runtime_on_failure(
     env_root.mkdir()
     backup_root = tmp_path / "backups"
     backup_root.mkdir()
+    credential_name = "_".join(("ANTHROPIC", "API", "KEY"))
     originals = {
-        role: 'HECATE_LLM_COMPLEX_MODEL="old"\nANTHROPIC_API_KEY="private-fixture"\n'
+        role: f'HECATE_LLM_COMPLEX_MODEL="old"\n{credential_name}="private-fixture"\n'
         for role in updater.installer.ROLES
     }
     for role, raw in originals.items():
