@@ -420,6 +420,25 @@ def test_catalog_digest_includes_fidelity_policy(monkeypatch):
     assert catalog_digest() != before
 
 
+def test_catalog_digest_includes_expected_network(monkeypatch):
+    from dataclasses import replace
+
+    from hecate_runner.bas.approved import catalog_digest
+
+    before = catalog_digest()
+    monkeypatch.setitem(
+        APPROVED_PROCEDURES,
+        "T1105",
+        replace(
+            APPROVED_PROCEDURES["T1105"],
+            expected_network=(
+                {"DestinationIp": "10.0.0.1", "DestinationPort": 9999, "Protocol": "tcp"},
+            ),
+        ),
+    )
+    assert catalog_digest() != before
+
+
 @pytest.mark.parametrize("technique", ["t1543.002", "T1057"])
 def test_technique_label_cannot_upgrade_a_pinned_smoke_ability(smoke_lab, technique):
     _settings, _procedure, detonation = smoke_lab
