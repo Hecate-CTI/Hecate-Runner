@@ -365,4 +365,3 @@ def test_clean_readme_text_strips_badges_and_image_tags() -> None:
     assert "badge.fury.io" not in cleaned
     assert "Usage: `python3 exploit.py --target 192.168.1.1`" in cleaned
     assert "/api/v1/debug" in cleaned
-
