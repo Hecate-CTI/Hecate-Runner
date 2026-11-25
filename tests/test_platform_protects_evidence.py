@@ -107,11 +107,11 @@ def test_a_wording_match_widens_onto_a_platform_the_intel_implies(orch: Orchestr
         asserted=[],
         intel_text="systematic data exfiltration using PowerShell-based collection and staging",
     )
-    assert platforms == ["Linux", "Windows"]
+    assert platforms == ["Windows"]
     assert facts["T1059.001"].valid is True
 
 
-def test_a_technique_the_cti_asserts_widens_whatever_the_text_says(orch: Orchestrator) -> None:
+def test_a_technique_assertion_alone_cannot_establish_target_platforms(orch: Orchestrator) -> None:
     facts: dict[str, TechniqueFact] = {}
     _, platforms = orch._resolve_ttps(
         ["T1546.005"],
@@ -121,7 +121,7 @@ def test_a_technique_the_cti_asserts_widens_whatever_the_text_says(orch: Orchest
         asserted=["T1546.005"],
         intel_text="no platform words here",
     )
-    assert platforms == ["Windows", "Linux", "macOS"]
+    assert platforms == []
     assert facts["T1546.005"].valid is True
 
 
@@ -148,9 +148,9 @@ def test_the_kapibala_draft_keeps_its_technique(
     assert result.draft_path is not None
     frontmatter = result.draft_path.read_text().split("---")[1]
     assert 'techniques: ["T1059.001"]' in frontmatter
-    assert '"Linux"' in frontmatter and '"Windows"' in frontmatter
+    assert '"Linux"' not in frontmatter and '"Windows"' in frontmatter
     trail = caplog.text
-    assert "keeping T1059.001 (the intel names it)" in trail
+    assert "does not support the hypothesis's platform claims" in trail
     assert "not in ATT&CK" not in trail
 
 
@@ -168,7 +168,7 @@ def test_a_platform_drop_is_not_reported_as_an_unknown_id(
     sample_hypothesis.hypothesis = "Adversaries deploy backdoors on macOS systems"
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
-        content="MISP Event: X\nSummary: The malware sets up a rogue domain controller.",
+        content="MISP Event: X\nSummary: The malware sets up a rogue domain controller on macOS.",
         source="misp",
     )
     Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()

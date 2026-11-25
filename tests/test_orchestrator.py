@@ -1448,7 +1448,7 @@ def test_resolve_ttps_scopes_to_the_intel_when_the_hypothesis_names_no_platform(
     assert platforms == ["Windows"]
 
 
-def test_resolve_ttps_prefers_the_hypothesis_claim_over_the_intel(
+def test_resolve_ttps_prefers_the_source_over_an_unsupported_model_scope(
     settings: Settings, mock_hecate: MagicMock
 ) -> None:
     mock_hecate.lookup_technique.return_value = _BROAD_T1036
@@ -1456,7 +1456,7 @@ def test_resolve_ttps_prefers_the_hypothesis_claim_over_the_intel(
     _, platforms = orch._resolve_ttps(
         ["T1036"], scope_text="on Linux servers", intel_text="dropped a .exe via PowerShell"
     )
-    assert platforms == ["Linux"]
+    assert platforms == ["Windows"]
 
 
 def test_resolve_ttps_leaves_scope_unknown_when_neither_names_a_platform(
@@ -1509,7 +1509,7 @@ def test_draft_records_cti_techniques_and_scoped_platform(
     )
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
-        content="MISP Event: X\nMITRE ATT&CK Techniques: T1059.003\nSummary: prose",
+        content="MISP Event: X\nMITRE ATT&CK Techniques: T1059.003\nSummary: The malware executes cmd.exe.",
         source="misp",
         metadata={
             "techniques": ["T1059.003", "T1071.001"],

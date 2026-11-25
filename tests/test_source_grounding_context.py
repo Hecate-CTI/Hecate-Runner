@@ -8,7 +8,7 @@ from hecate_agent.core.technique_evidence import map_behaviours
 
 from hecate_runner.config import Settings
 from hecate_runner.cti import CTIItem
-from hecate_runner.hecate_client import TechniqueMetadata
+from hecate_runner.hecate_client import HypothesisResult, TechniqueMetadata
 from hecate_runner.orchestrator import Orchestrator
 
 
@@ -93,3 +93,36 @@ def test_narrow_attack_applicability_is_still_not_target_evidence(
     assert tactics == ["initial-access"]
     assert platforms == []
     assert "Linux" in facts["T1190"].platforms  # Reference applicability is retained separately.
+
+
+def test_model_scope_cannot_fill_in_platforms_missing_from_the_advisory(settings, mock_hecate):
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
+    mock_hecate.lookup_technique.return_value = TechniqueMetadata(
+        technique_id="T1190",
+        found=True,
+        platforms=["Linux", "Windows"],
+    )
+    _, platforms = orch._resolve_ttps(
+        ["T1190"],
+        scope_text="Apache HTTP Server on Linux and Windows servers",
+        intel_text="Apache HTTP Server mod_http2 assign_headers() race allows remote code execution.",
+    )
+    assert platforms == []
+
+
+def test_unsupported_platforms_are_flagged_in_prose_even_when_scope_is_unknown(
+    settings, mock_hecate
+):
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
+    hypothesis = HypothesisResult(
+        hypothesis="Exploit Apache HTTP Server on Windows", location="Linux hosts"
+    )
+    orch._audit_claims(hypothesis, "Apache HTTP Server mod_http2 race condition.", [])
+    assert any(
+        f["field"] == "location" and "scope remains unknown" in f["reason"]
+        for f in orch._claim_audit
+    )
+    assert any(
+        f["field"] == "hypothesis" and "scope remains unknown" in f["reason"]
+        for f in orch._claim_audit
+    )

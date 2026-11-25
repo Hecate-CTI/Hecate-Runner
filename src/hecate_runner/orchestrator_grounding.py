@@ -279,7 +279,7 @@ class OrchestratorGroundingMixin:
         hypothesis.location = prose["location"]
         hypothesis.evidence = prose["evidence"]
         findings += rewritten
-        findings += self._unsupported_platform_claims(hypothesis)
+        findings += self._unsupported_platform_claims(hypothesis, platforms, source_text)
         self._claim_audit = [f.to_dict() for f in findings]
         if findings:
             counts = Counter(f.action for f in findings)
@@ -314,26 +314,37 @@ class OrchestratorGroundingMixin:
                 )
         return out
 
-    def _unsupported_platform_claims(self, hypothesis: HypothesisResult) -> list[Any]:
+    def _unsupported_platform_claims(
+        self,
+        hypothesis: HypothesisResult,
+        platforms: list[str] | None = None,
+        source_text: str = "",
+    ) -> list[Any]:
         """Prose naming a platform the specimen's evidence does not show; flagged, not rewritten."""
         from hecate_agent.core.claim_audit import ClaimFinding
 
-        if not self._specimen:
+        if not self._specimen and not source_text:
             return []
+        supported = self._specimen or platforms or []
         flagged = []
         for name, text in (
             ("location", hypothesis.location),
             ("hypothesis", hypothesis.hypothesis),
         ):
-            extra = [p for p in platforms_named_in(text) if p not in self._specimen]
+            extra = [p for p in platforms_named_in(text) if p not in supported]
             if extra:
                 flagged.append(
                     ClaimFinding(
                         name,
                         text,
                         "flagged",
-                        f"names {listing(extra)}, but the specimen's evidence shows only "
-                        f"{listing(self._specimen)}; the hunt is scoped to the evidence",
+                        (
+                            f"names {listing(extra)}, but the specimen's evidence shows only "
+                            f"{listing(supported)}; the hunt is scoped to the evidence"
+                        )
+                        if supported
+                        else f"names {listing(extra)}, but the primary source does not establish a target platform; "
+                        "platform scope remains unknown",
                     )
                 )
         return flagged

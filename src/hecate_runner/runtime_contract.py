@@ -50,7 +50,10 @@ def _check_source_context() -> None:
         trail=SimpleNamespace(step=lambda *args: None),
     )
     _, platforms = resolve_ttps(
-        fixture, ["T1190"], intel_text="A web application has a race condition."
+        fixture,
+        ["T1190"],
+        scope_text="Linux and Windows web servers",
+        intel_text="A web application has a race condition.",
     )
     require(not platforms, "ATT&CK applicability became target platform scope")
 
