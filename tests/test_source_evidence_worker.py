@@ -181,3 +181,144 @@ def test_worker_failure_does_not_expose_provider_output(isolated_client):
         isolated_client.source_evidence_with_indicators(URL, {}, timeout_sec=10)
     assert "KeyError" not in str(error.value)
     assert "provider diagnostic" not in str(error.value)
+
+
+def test_sanitize_worker_env_strips_sensitive_integrations():
+    from hecate_runner.hecate_client import sanitize_worker_env
+
+    dirty = {
+        "PATH": "/usr/bin",
+        "PYTHONPATH": "/workspace",
+        "VIRTUAL_ENV": "/workspace/.venv",
+        "SLACK_BOT_TOKEN": "xoxb-secret",
+        "SLACK_SIGNING_SECRET": "secret",
+        "SPLUNK_TOKEN": "splunk-secret",
+        "SPLUNK_HOST": "splunk.corp",
+        "CALDERA_API_KEY": "caldera-secret",
+        "MISP_KEY": "misp-secret",
+        "AWS_SECRET_ACCESS_KEY": "aws-secret",
+        "GITHUB_TOKEN": "ghp-secret",
+        "ANTHROPIC_API_KEY": "sk-ant-valid",
+        "OPENAI_API_KEY": "sk-proj-valid",
+        "HECATE_LLM_PROVIDER": "anthropic",
+        "OLLAMA_HOST": "http://localhost:11434",
+        "HECATE_RUNNER_SOURCE_EVIDENCE_MAX_CALLS": "16",
+        "ARBITRARY_SECRET": "should-not-pass",
+    }
+    clean = sanitize_worker_env(dirty)
+    assert "SLACK_BOT_TOKEN" not in clean
+    assert "SPLUNK_TOKEN" not in clean
+    assert "CALDERA_API_KEY" not in clean
+    assert "MISP_KEY" not in clean
+    assert "AWS_SECRET_ACCESS_KEY" not in clean
+    assert "GITHUB_TOKEN" not in clean
+    assert "ARBITRARY_SECRET" not in clean
+    assert clean["PATH"] == "/usr/bin"
+    assert clean["ANTHROPIC_API_KEY"] == "sk-ant-valid"
+    assert clean["OPENAI_API_KEY"] == "sk-proj-valid"
+    assert clean["HECATE_LLM_PROVIDER"] == "anthropic"
+    assert clean["OLLAMA_HOST"] == "http://localhost:11434"
+
+
+def test_worker_subprocess_does_not_receive_sensitive_tokens(tmp_path):
+    bootstrap = tmp_path / "bootstrap"
+    bootstrap.mkdir()
+    (bootstrap / "sitecustomize.py").write_text("""
+import os
+import sys
+from pathlib import Path
+from hecate_agent.core import source_evidence as source
+from hecate_agent.core.provenance import IndicatorRecord
+
+def extract(url, **kwargs):
+    # Verify no sensitive tokens reached worker environment
+    for bad in ("SLACK_", "SPLUNK_", "CALDERA_", "MISP_", "AWS_", "GITHUB_"):
+        assert not any(k.startswith(bad) for k in os.environ), f"Found {bad} in worker environment!"
+    assert os.environ.get("ANTHROPIC_API_KEY") == "fixture-key"
+    return source.SourceEvidence(url=url, text="cmd.exe", artifacts=[], indicators=[], usage={"llm_calls": 1})
+
+source.extract_source_evidence = extract
+source.build_indicator_records = lambda *a, **k: []
+""")
+    python_path = os.pathsep.join(filter(None, [str(bootstrap), os.environ.get("PYTHONPATH")]))
+    client = HecateClient(
+        hecate_bin=Path(sys.executable),
+        workspace=tmp_path,
+        env_overrides={
+            "PYTHONPATH": python_path,
+            "SLACK_BOT_TOKEN": "leak-slack",
+            "SPLUNK_TOKEN": "leak-splunk",
+            "CALDERA_API_KEY": "leak-caldera",
+            "MISP_KEY": "leak-misp",
+            "AWS_SECRET_KEY": "leak-aws",
+            "GITHUB_TOKEN": "leak-gh",
+            "ANTHROPIC_API_KEY": "fixture-key",
+        },
+    )
+    evidence, _ = client.source_evidence_with_indicators(URL, {}, timeout_sec=10)
+    assert evidence.usage["llm_calls"] == 1
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        ("169.254.169.254", 80),
+        ("127.0.0.1", 80),
+        ("10.0.0.1", 80),
+        ("192.168.1.1", 443),
+        ("localhost", 80),
+        ("metadata.google.internal", 80),
+        ("advisory.local", 443),
+    ],
+)
+def test_socket_egress_filter_blocks_loopback_metadata_and_private(address):
+    import socket
+
+    from hecate_runner.source_evidence_worker import (
+        install_socket_egress_filter,
+        uninstall_socket_egress_filter,
+    )
+
+    install_socket_egress_filter(force=True)
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        with pytest.raises(PermissionError):
+            sock.connect(address)
+        sock.close()
+    finally:
+        uninstall_socket_egress_filter()
+
+
+def test_socket_egress_filter_allows_configured_llm_endpoints(monkeypatch):
+    from hecate_runner.source_evidence_worker import (
+        _check_socket_destination,
+        install_socket_egress_filter,
+        uninstall_socket_egress_filter,
+    )
+
+    monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
+    monkeypatch.setenv("HECATE_LLM_BASE_URL", "http://10.0.0.5:8000/v1")
+
+    install_socket_egress_filter(force=True)
+    try:
+        # Configured Ollama endpoint should be allowed
+        _check_socket_destination(("localhost", 11434))
+        _check_socket_destination(("127.0.0.1", 11434))
+
+        # Configured internal LLM endpoint should be allowed
+        _check_socket_destination(("10.0.0.5", 8000))
+
+        # Public destinations should be allowed
+        _check_socket_destination(("93.184.216.34", 443))
+
+        # Other ports or other internal hosts must still be blocked
+        with pytest.raises(PermissionError):
+            _check_socket_destination(("127.0.0.1", 80))
+        with pytest.raises(PermissionError):
+            _check_socket_destination(("10.0.0.5", 80))
+        with pytest.raises(PermissionError):
+            _check_socket_destination(("10.0.0.6", 8000))
+        with pytest.raises(PermissionError):
+            _check_socket_destination(("169.254.169.254", 80))
+    finally:
+        uninstall_socket_egress_filter()

@@ -36,6 +36,76 @@ _NO_VALID_RULE_RE = re.compile(
     r"Sigma generation failed: no log source produced a valid rule: (.*)\Z", re.S
 )
 
+ALLOWED_WORKER_SYSTEM_ENV_VARS = frozenset(
+    {
+        "PATH",
+        "PYTHONPATH",
+        "VIRTUAL_ENV",
+        "HOME",
+        "USER",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "SYSTEMROOT",
+        "COMSPEC",
+        "PATHEXT",
+    }
+)
+
+ALLOWED_WORKER_LLM_ENV_VARS = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "GEMINI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "MISTRAL_API_KEY",
+        "TAVILY_API_KEY",
+        "HECATE_WORKSPACE",
+    }
+)
+
+ALLOWED_WORKER_ENV_PREFIXES = (
+    "HECATE_LLM_",
+    "OLLAMA_",
+    "HECATE_RUNNER_SOURCE_EVIDENCE_",
+    "TEST_",
+    "PYTEST_",
+)
+
+BLOCKED_WORKER_ENV_PREFIXES = (
+    "SLACK_",
+    "SPLUNK_",
+    "CALDERA_",
+    "MISP_",
+    "AWS_",
+    "GITHUB_",
+)
+
+
+def sanitize_worker_env(env: dict[str, str]) -> dict[str, str]:
+    """Sanitize environment passed to the isolated source evidence worker.
+
+    Explicitly retains system and LLM configuration while stripping sensitive
+    integration credentials (e.g. Slack, Splunk, Caldera, MISP, AWS, GitHub).
+    """
+    sanitized: dict[str, str] = {}
+    for key, value in env.items():
+        upper_key = key.upper()
+        if any(upper_key.startswith(bad) for bad in BLOCKED_WORKER_ENV_PREFIXES):
+            continue
+        if (
+            key in ALLOWED_WORKER_SYSTEM_ENV_VARS
+            or key in ALLOWED_WORKER_LLM_ENV_VARS
+            or any(key.startswith(prefix) for prefix in ALLOWED_WORKER_ENV_PREFIXES)
+        ):
+            sanitized[key] = value
+    return sanitized
+
 
 @dataclass
 class ResearchResult:
@@ -326,8 +396,9 @@ class HecateClient:
 
         from hecate_runner.subprocess_utils import run_process_group
 
-        env = {**os.environ, **self.env_overrides}
-        env["HECATE_WORKSPACE"] = str(self.workspace.resolve())
+        raw_env = {**os.environ, **self.env_overrides}
+        raw_env["HECATE_WORKSPACE"] = str(self.workspace.resolve())
+        env = sanitize_worker_env(raw_env)
         try:
             result = run_process_group(
                 [
