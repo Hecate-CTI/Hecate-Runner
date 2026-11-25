@@ -58,8 +58,11 @@ class OrchestratorGroundingMixin:
             source = self._source_evidence.text
             if item.source == "github_poc":
                 from hecate_agent.core.command_rules import without_tooling_sections
+                from hecate_runner.cti.github_poc import clean_readme_text
 
-                source = re.sub(r"<[^>]+>", " ", without_tooling_sections(source))
+                source = re.sub(
+                    r"<[^>]+>", " ", without_tooling_sections(clean_readme_text(source))
+                )
             texts.append(("primary source", source))
         return texts
 

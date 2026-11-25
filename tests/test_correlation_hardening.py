@@ -7,6 +7,7 @@ from pathlib import Path
 from hecate_runner.correlation import (
     ThreatEntityCorrelator,
     ThreatEntityExtractor,
+    _is_c2_correlation_candidate,
     _is_relevant_domain,
 )
 from hecate_runner.cti.base import CTIItem
@@ -66,6 +67,12 @@ def test_benign_vendor_and_advisory_domains_are_ignored():
         "openjdk.org",
         "oracle.com",
         "bleepingcomputer.com",
+        "shields.io",
+        "img.shields.io",
+        "badge.fury.io",
+        "badgen.net",
+        "codecov.io",
+        "coveralls.io",
     ]
     for dom in benign_domains:
         assert not _is_relevant_domain(dom), f"Expected {dom} to be recognized as benign"
@@ -75,9 +82,21 @@ def test_benign_vendor_and_advisory_domains_are_ignored():
     assert not _is_relevant_domain("base64.getdecoder")
     assert not _is_relevant_domain("exploit.class")
 
+    # Image/badge assets should not be treated as domains
+    assert not _is_relevant_domain("20differential-success.svg")
+    assert not _is_relevant_domain("license-mit-blue.svg")
+    assert not _is_relevant_domain("banner.png")
+    assert not _is_relevant_domain("icon.ico")
+
+    # Code identifiers with non-TLD attributes must not be domains
+    assert not _is_relevant_domain("request.state")
+    assert not _is_relevant_domain("os.path")
+    assert not _is_relevant_domain("sys.argv")
+
     # Real malicious C2 domains should be accepted
     assert _is_relevant_domain("c2.evil-campaign.com")
     assert _is_relevant_domain("payload-drop.org")
+    assert _is_relevant_domain("beacon-callback.xyz")
 
 
 def test_temporal_cve_disparity_prevents_false_correlation(tmp_path: Path):
@@ -260,3 +279,90 @@ indicators:
     )
     match_2019 = correlator.correlate(item_2019)
     assert match_2019 is None
+
+
+def test_c2_correlation_candidate_rejects_benign_dual_use_and_assets() -> None:
+    """_is_c2_correlation_candidate must reject badge servers, dual-use cloud hosts, and asset filenames."""
+    # Badge and platform hosts must never be C2 correlation candidates
+    assert not _is_c2_correlation_candidate("img.shields.io")
+    assert not _is_c2_correlation_candidate("shields.io")
+    assert not _is_c2_correlation_candidate("codecov.io")
+    assert not _is_c2_correlation_candidate("raw.githubusercontent.com")
+    assert not _is_c2_correlation_candidate("storage.googleapis.com")
+    assert not _is_c2_correlation_candidate("discord.com")
+
+    # Assets and code tokens must never be C2 candidates
+    assert not _is_c2_correlation_candidate("20differential-success.svg")
+    assert not _is_c2_correlation_candidate("license-mit-blue.svg")
+    assert not _is_c2_correlation_candidate("request.state")
+
+    # Legitimate external C2 infrastructure must be accepted
+    assert _is_c2_correlation_candidate("c2-callback.evil-campaign.com")
+    assert _is_c2_correlation_candidate("payload-drop.org")
+    assert _is_c2_correlation_candidate("45.33.32.156")
+
+
+def test_correlator_does_not_link_unrelated_cves_sharing_shields_badge(tmp_path: Path) -> None:
+    """An incoming PoC with shields.io badge must not link to an existing hunt via shared_c2_ioc."""
+    hunts_dir = tmp_path / "hunts"
+    hunts_dir.mkdir()
+
+    # Hunt H-0035 for Apache mod_http2 with shields badge in prose
+    hunt_file = hunts_dir / "H-0035.md"
+    hunt_file.write_text(
+        """---
+hunt_id: H-0035
+title: "Apache mod_http2 RCE"
+techniques: ["T1190"]
+indicators:
+  cve: ["CVE-2026-119618"]
+---
+# H-0035: Apache mod_http2 RCE
+Evidence includes ![CVSS](https://img.shields.io/badge/CVSS-9.8-critical) badge.
+""",
+        encoding="utf-8",
+    )
+
+    correlator = ThreatEntityCorrelator(hunts_dir)
+
+    # Incoming PoC for an entirely different CVE that also has shields.io badges and asset links
+    incoming_item = CTIItem(
+        source="github_poc",
+        identifier="googlesky/CVE-2026-135817",
+        title="PoC: CVE-2026-135817 - unspecified software",
+        content=(
+            "PoC for CVE-2026-135817.\n"
+            "[![License](https://img.shields.io/badge/license-mit-blue.svg)](https://opensource.org/licenses/MIT)\n"
+            "Diff: 20differential-success.svg\n"
+            "Code snippet: `request.state.tenant_id = 1`\n"
+        ),
+        metadata={
+            "cve_id": "CVE-2026-135817",
+            "repo_full_name": "googlesky/CVE-2026-135817",
+        },
+    )
+
+    match = correlator.correlate(incoming_item)
+    assert match is None, f"Expected no correlation, but got match: {match}"
+
+
+def test_clean_readme_text_strips_badges_and_image_tags() -> None:
+    """clean_readme_text removes markdown badges, img tags, and shields URLs."""
+    from hecate_runner.cti.github_poc import clean_readme_text
+
+    raw_readme = (
+        "# Exploit Toolkit\n\n"
+        "[![Build Status](https://img.shields.io/travis/user/repo/master.svg)](https://travis-ci.org/user/repo)\n"
+        "![License](https://img.shields.io/badge/license-MIT-blue.svg)\n"
+        '<img src="https://badge.fury.io/py/poc.svg" alt="PyPI">\n\n'
+        "Usage: `python3 exploit.py --target 192.168.1.1`\n"
+        "Trigger vulnerability by sending payload to `/api/v1/debug`."
+    )
+    cleaned = clean_readme_text(raw_readme)
+    assert "shields.io" not in cleaned
+    assert "travis-ci.org" not in cleaned
+    assert "license-MIT-blue.svg" not in cleaned
+    assert "badge.fury.io" not in cleaned
+    assert "Usage: `python3 exploit.py --target 192.168.1.1`" in cleaned
+    assert "/api/v1/debug" in cleaned
+

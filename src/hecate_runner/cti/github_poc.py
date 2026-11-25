@@ -119,16 +119,47 @@ _LOOPBACK_HOST = re.compile(r"^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\]
 _REFERENCE_HOSTS = (
     "github.com",
     "githubusercontent.com",
+    "raw.githubusercontent.com",
+    "user-images.githubusercontent.com",
     "github.io",
     "githubassets.com",
     "shields.io",
+    "badge.fury.io",
+    "badgen.net",
+    "codecov.io",
+    "coveralls.io",
+    "travis-ci.org",
+    "travis-ci.com",
+    "readthedocs.org",
+    "readthedocs.io",
+    "gravatar.com",
     "nvd.nist.gov",
     "cve.org",
     "mitre.org",
     "ietf.org",
     "pypi.org",
     "npmjs.com",
+    "pkg.go.dev",
+    "crates.io",
 )
+
+_MARKDOWN_BADGE_RE = re.compile(
+    r"\[!\[[^\]]*\]\([^)]+\)\]\([^)]+\)|!\[[^\]]*\]\([^)]+\)|<img[^>]+>",
+    re.IGNORECASE,
+)
+_BADGE_OR_ASSET_URL_RE = re.compile(
+    r"https?://(?:[^\s/:'\"`<>]+)?(?:shields\.io|badge\.fury\.io|badgen\.net|codecov\.io)[^\s'\"`<>)\]]*",
+    re.IGNORECASE,
+)
+
+
+def clean_readme_text(readme: str) -> str:
+    """Strip markdown badge images, HTML image tags, and badge hosting URLs from a README."""
+    if not readme:
+        return ""
+    text = _MARKDOWN_BADGE_RE.sub(" ", readme)
+    text = _BADGE_OR_ASSET_URL_RE.sub(" ", text)
+    return text
 
 
 def _cell(text: str, limit: int = 200) -> str:
@@ -489,7 +520,7 @@ class GitHubPocProvider(CTIProvider):
             "http_requests": _readme_requests(without_operator_sections(readme)),
             "endpoints": _readme_endpoints(readme, blocks),
             "ports": _readme_ports(readme, blocks),
-            "readme_excerpt": readme[:1000].strip(),
+            "readme_excerpt": clean_readme_text(readme)[:1000].strip(),
         }
 
     def _build_blurb(self, repo_data: dict[str, Any], artifacts: dict[str, Any]) -> str:
@@ -499,9 +530,10 @@ class GitHubPocProvider(CTIProvider):
         vuln_type = artifacts["vuln_type"]
         repo_url = repo_data.get("html_url")
         full_name = repo_data.get("full_name")
-        desc = repo_data.get("description") or artifacts.get(
+        raw_desc = repo_data.get("description") or artifacts.get(
             "readme_excerpt", "No description provided."
         )
+        desc = clean_readme_text(raw_desc).strip() or "No description provided."
         stars = repo_data.get("stars", 0)
 
         technique = VULN_TYPE_TECHNIQUES.get(vuln_type)
