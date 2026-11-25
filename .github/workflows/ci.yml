@@ -38,7 +38,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # pyproject.toml pulls in `hecate-agent` as an editable path dependency
       # at ../Hecate-Core, which only exists locally because the two repos are
@@ -51,7 +51,7 @@ jobs:
       # it went private. HECATE_CORE_DEPLOY_KEY is a read-only deploy key
       # registered on Hecate-Core; its private half lives in this repo's secrets.
       - name: Checkout Hecate-Core (sibling dependency for hecate-agent)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: Hecate-CTI/Hecate-Core
           ref: ${{ vars.HECATE_CORE_REF || 'main' }}
