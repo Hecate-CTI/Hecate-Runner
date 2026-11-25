@@ -271,6 +271,7 @@ def test_service_units_use_dedicated_accounts_and_protect_host_code():
         if role != "bas":
             assert "HECATE_SERVICE_ISOLATED=1" in text
             assert "HECATE_STRICT_CREDENTIAL_ROLES=1" in text
+            assert "Environment=HECATE_ALLOW_UNSANDBOXED_EMULATION=0" in text
             assert "ReadWritePaths=/home" not in text
 
 
