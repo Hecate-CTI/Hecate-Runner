@@ -168,7 +168,7 @@ def test_timeout_kills_worker_and_descendants(isolated_client, tmp_path, stage):
         while True:
             try:
                 state = status.read_text().split(")", 1)[1].split()[0]
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 break
             if state == "Z":
                 break

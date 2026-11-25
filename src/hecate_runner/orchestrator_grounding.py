@@ -53,9 +53,11 @@ class OrchestratorGroundingMixin:
         Research can suggest what to investigate, but generated research is
         not evidence that this particular source reported a behavior.
         """
-        texts = [("cti", item.content)]
+        from hecate_agent.core.source_evidence import report_body_text, strip_page_furniture
+
+        texts = [("cti", strip_page_furniture(report_body_text(item.content)))]
         if self._source_evidence is not None and self._source_evidence.text:
-            source = self._source_evidence.text
+            source = strip_page_furniture(report_body_text(self._source_evidence.text))
             if item.source == "github_poc":
                 from hecate_agent.core.command_rules import without_tooling_sections
 
@@ -178,17 +180,10 @@ class OrchestratorGroundingMixin:
                         behaviour="named by ID",
                     )
 
-            if (
-                found is None
-                and upper.startswith("T1059.")
-                and any(
-                    e.technique_id.startswith("T1059.") and e.status == "observed"
-                    for e in behaviour
-                )
-            ):
-                # A script host is not evidence for a second language. Keep
-                # every language the source supports, without adding an
-                # unsupported sibling proposed by a model/name matcher.
+            if found is None and upper not in shielded:
+                # A wording/name match may come only from navigation,
+                # mitigation or a generic definition. No supporting passage
+                # must not fall through as observed behavior.
                 unevidenced.append(upper)
                 continue
 
@@ -284,7 +279,7 @@ class OrchestratorGroundingMixin:
         hypothesis.location = prose["location"]
         hypothesis.evidence = prose["evidence"]
         findings += rewritten
-        findings += self._unsupported_platform_claims(hypothesis)
+        findings += self._unsupported_platform_claims(hypothesis, platforms, source_text)
         self._claim_audit = [f.to_dict() for f in findings]
         if findings:
             counts = Counter(f.action for f in findings)
@@ -319,38 +314,44 @@ class OrchestratorGroundingMixin:
                 )
         return out
 
-    def _unsupported_platform_claims(self, hypothesis: HypothesisResult) -> list[Any]:
+    def _unsupported_platform_claims(
+        self,
+        hypothesis: HypothesisResult,
+        platforms: list[str] | None = None,
+        source_text: str = "",
+    ) -> list[Any]:
         """Prose naming a platform the specimen's evidence does not show; flagged, not rewritten."""
         from hecate_agent.core.claim_audit import ClaimFinding
 
-        if not self._specimen:
+        if not self._specimen and not source_text:
             return []
+        supported = self._specimen or platforms or []
         flagged = []
         for name, text in (
             ("location", hypothesis.location),
             ("hypothesis", hypothesis.hypothesis),
         ):
-            extra = [p for p in platforms_named_in(text) if p not in self._specimen]
+            extra = [p for p in platforms_named_in(text) if p not in supported]
             if extra:
                 flagged.append(
                     ClaimFinding(
                         name,
                         text,
                         "flagged",
-                        f"names {listing(extra)}, but the specimen's evidence shows only "
-                        f"{listing(self._specimen)}; the hunt is scoped to the evidence",
+                        (
+                            f"names {listing(extra)}, but the specimen's evidence shows only "
+                            f"{listing(supported)}; the hunt is scoped to the evidence"
+                        )
+                        if supported
+                        else f"names {listing(extra)}, but the primary source does not establish a target platform; "
+                        "platform scope remains unknown",
                     )
                 )
         return flagged
 
     def _primary_evidence_text(self, item: CTIItem) -> str:
         """The feed item and fetched primary report, excluding generated enrichment."""
-        base_text = (
-            f"{item.content}\n{self._source_evidence.text}"
-            if (self._source_evidence is not None and self._source_evidence.text)
-            else item.content
-        )
-        return base_text
+        return "\n".join(text for _, text in self._evidence_texts(item, None))
 
     def _command_text(self, item: CTIItem) -> str:
         """The text whose quoted commands may become process rules."""

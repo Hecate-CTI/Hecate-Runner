@@ -101,6 +101,19 @@ def resolve_ttps(
         if not kept:
             claimant = "the specimen's evidence"
         claimed = kept or list(specimen)
+    elif intel_text:
+        evidenced_scope = platforms_evidenced_in(intel_text)
+        unsupported = [p for p in claimed if p not in evidenced_scope]
+        if unsupported:
+            orch.trail.step(
+                "scope",
+                "the source does not support the hypothesis's platform claims: %s",
+                listing(unsupported),
+            )
+        kept = [p for p in claimed if p in evidenced_scope]
+        claimed = kept or evidenced_scope
+        if not kept:
+            claimant = "the intel"
     if not claimed and intel_text:
         claimed = platforms_evidenced_in(intel_text)
         claimant = "the intel"
@@ -142,7 +155,7 @@ def resolve_ttps(
                     continue
                 if specimen:
                     missing = [p for p in missing if p in specimen]
-                if tech_id not in by_cti and tech_id.split(".")[0] not in by_cti:
+                if intel_text or (tech_id not in by_cti and tech_id.split(".")[0] not in by_cti):
                     missing = [p for p in missing if p in evidenced]
                     if not missing:
                         orch.trail.step(
@@ -182,4 +195,8 @@ def resolve_ttps(
 
         return tactics, final_platforms
 
-    return tactics, platforms
+    orch.trail.step(
+        "scope",
+        "no source or hypothesis platform evidence; ATT&CK applicability does not establish target scope",
+    )
+    return tactics, []
