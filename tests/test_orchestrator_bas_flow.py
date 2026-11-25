@@ -15,6 +15,36 @@ from hecate_runner.hunt_writer import DraftHuntRequest, render_draft
 from hecate_runner.orchestrator import Orchestrator
 
 
+@pytest.mark.parametrize(
+    "platforms", [[], ["Unknown"], ["IaaS"], ["Containers", "Linux"], ["Windows", "Linux"]]
+)
+def test_unresolved_scope_skips_bas_without_guessing_a_target(
+    settings, mock_hecate, monkeypatch, platforms
+):
+    settings.bas_enabled = True
+    settings.bas_mode = "mock"
+    provider = MagicMock(name="provider")
+    provider.name = "mock"
+    monkeypatch.setattr("hecate_runner.bas.get_bas_provider", lambda *args: provider)
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
+    req = DraftHuntRequest(
+        hunt_id="H-0099",
+        generated_at=datetime.now(UTC),
+        platforms=platforms,
+        threat_intel="Source scope unknown",
+        hypothesis=HypothesisResult(techniques=["T1059.004"]),
+    )
+    orch._run_bas_validation(
+        req,
+        [{"title": "candidate", "rule_yaml": "title: candidate"}],
+        settings.hecate_workspace,
+        None,
+    )
+    assert req.bas_verification["status"] == "skipped"
+    assert "scope is unresolved" in req.bas_verification["reason"]
+    provider.detonate.assert_not_called()
+
+
 def test_render_draft_with_bas_verification() -> None:
     req = DraftHuntRequest(
         hunt_id="H-0099",

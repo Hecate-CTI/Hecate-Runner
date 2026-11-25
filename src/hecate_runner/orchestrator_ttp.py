@@ -182,4 +182,8 @@ def resolve_ttps(
 
         return tactics, final_platforms
 
-    return tactics, platforms
+    orch.trail.step(
+        "scope",
+        "no source or hypothesis platform evidence; ATT&CK applicability does not establish target scope",
+    )
+    return tactics, []

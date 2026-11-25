@@ -51,7 +51,7 @@ def _run(
     )
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
-        content="OTX Pulse: VShell\nDescription: a resume loader.", source="otx"
+        content="OTX Pulse: VShell\nDescription: a resume loader executes cmd.exe.", source="otx"
     )
     Orchestrator(settings=settings, hecate=hecate, cti_provider=provider).run_once()
     return [r.getMessage() for r in caplog.records if r.name == LOGGER_NAME]

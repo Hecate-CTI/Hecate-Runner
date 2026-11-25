@@ -393,12 +393,19 @@ def run_bas_validation(
         log.debug("No ATT&CK technique identified for BAS validation on %s", req.hunt_id)
         return
 
-    platforms_lower = {p.strip().lower() for p in req.platforms if p.strip()}
-    is_cloud = any(p in ("cloud", "aws", "gcp", "azure", "k8s", "iaas") for p in platforms_lower)
-    target_platform = (
-        "aws" if is_cloud else (next(iter(platforms_lower)) if platforms_lower else "linux")
-    )
-    norm_platform = normalize_platform(target_platform)
+    try:
+        scoped_platforms = {normalize_platform(p) for p in req.platforms if p.strip()}
+        if len(scoped_platforms) != 1:
+            raise ValueError("BAS requires one explicit supported target platform")
+    except ValueError as exc:
+        from hecate_runner.bas.runtime import skipped_bas
+
+        reason = f"BAS target scope is unresolved: {exc}. Select a reviewed target manually."
+        req.bas_verification = skipped_bas(orch.settings, req.hunt_id, reason)
+        orch.trail.step("bas", "%s", reason)
+        return
+    norm_platform = next(iter(scoped_platforms))
+    is_cloud = norm_platform in ("aws", "gcp", "azure", "k8s")
 
     allowed_hosts = list(getattr(orch.settings, "bas_allowed_hosts", []) or [])
     allowed_accounts = list(getattr(orch.settings, "bas_allowed_accounts", []) or [])

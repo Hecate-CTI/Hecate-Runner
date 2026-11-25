@@ -349,7 +349,7 @@ class TestDeterministicFaultAndRecovery:
         raw_cti = """### Threat Intel Brief
 Date: 2026-11-16
 TLP:CLEAR
-Adversary persistent rootkit campaign.
+Adversary persistent rootkit campaign dumping LSASS memory on Windows.
 """
         (queue_dir / "next.txt").write_text(raw_cti, encoding="utf-8")
 

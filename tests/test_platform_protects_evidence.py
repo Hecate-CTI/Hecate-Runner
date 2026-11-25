@@ -34,6 +34,7 @@ _PLATFORMS = {
 def _lookup(technique_id: str, timeout_sec: int | None = None) -> TechniqueMetadata:
     return TechniqueMetadata(
         technique_id=technique_id,
+        name="Rogue Domain Controller" if technique_id == "T1207" else "",
         tactics=["execution"],
         platforms=_PLATFORMS.get(technique_id, []),
         found=technique_id in _PLATFORMS,
@@ -167,7 +168,8 @@ def test_a_platform_drop_is_not_reported_as_an_unknown_id(
     sample_hypothesis.hypothesis = "Adversaries deploy backdoors on macOS systems"
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
-        content="MISP Event: X\nSummary: prose", source="misp"
+        content="MISP Event: X\nSummary: The malware sets up a rogue domain controller.",
+        source="misp",
     )
     Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
 

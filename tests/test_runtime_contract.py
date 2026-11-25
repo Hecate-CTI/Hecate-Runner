@@ -40,3 +40,19 @@ def test_release_contract_detects_a_lost_runner_artifact_gate(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="accepted blocked"):
         check_runtime_contract()
+
+
+def test_release_contract_detects_patch_hash_regression(monkeypatch):
+    monkeypatch.setattr(
+        "hecate_agent.api.extract_indicators", lambda text: {"hashes": ["patch-id"]}
+    )
+    with pytest.raises(RuntimeError, match="patch revision"):
+        check_runtime_contract()
+
+
+def test_release_contract_detects_applicability_used_as_scope(monkeypatch):
+    monkeypatch.setattr(
+        "hecate_runner.orchestrator_ttp.resolve_ttps", lambda *args, **kwargs: ([], ["Linux"])
+    )
+    with pytest.raises(RuntimeError, match="applicability"):
+        check_runtime_contract()

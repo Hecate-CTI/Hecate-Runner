@@ -112,8 +112,9 @@ def test_hybrid_cloud_container_platforms_recognized(
 ) -> None:
     caplog.set_level(logging.INFO)
     cloud_page = (
-        "UNC-3882 compromised Entra ID, performed sts:AssumeRole in AWS, "
-        "used nsenter for container breakout on Kubernetes worker nodes, "
+        "The attacker compromised Entra ID, performed sts:AssumeRole in AWS, "
+        "abused OAuth tokens (T1550.001), "
+        "used nsenter for container breakout (T1611) on Kubernetes worker nodes, "
         "and spawned bash on Linux."
     )
     mock_hecate.source_evidence.side_effect = None
@@ -158,6 +159,7 @@ def test_hybrid_cloud_container_platforms_recognized(
         ),
         source="otx",
         title="Hybrid Intrusion",
+        metadata={"techniques": ["T1611", "T1550.001"]},
     )
     result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
     draft = result.draft_path.read_text()
