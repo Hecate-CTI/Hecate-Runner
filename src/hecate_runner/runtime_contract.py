@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -13,6 +14,64 @@ import yaml
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+def _check_source_context() -> None:
+    from hecate_agent.api import extract_indicators
+    from hecate_agent.core.source_evidence import report_body_text
+    from hecate_agent.core.technique_evidence import technique_support
+
+    from hecate_runner.hecate_client import TechniqueMetadata
+    from hecate_runner.orchestrator_ttp import resolve_ttps
+
+    revision = "a" * 40
+    body = report_body_text(
+        json.dumps(
+            {
+                "dataType": "CVE_RECORD",
+                "containers": {
+                    "cna": {
+                        "descriptions": [
+                            {"lang": "en", "value": "A web application has a race condition."}
+                        ],
+                    }
+                },
+            }
+        )
+    )
+    require("containers" not in body, "CVE schema metadata is exposed as target evidence")
+    require(
+        not extract_indicators(
+            f"Vendor patch: https://github.com/example/project/commit/{revision}"
+        )["hashes"],
+        "Source grounding treats a patch revision as a malware hash",
+    )
+    support = technique_support(
+        "T1105",
+        ["Ingress Tool Transfer"],
+        "Please note that customers may download only software for which the license is still valid.",
+    )
+    require(
+        support is None or support.status != "observed", "Support policy became attacker behavior"
+    )
+    fixture = SimpleNamespace(
+        hecate=SimpleNamespace(
+            lookup_technique=lambda *args, **kwargs: TechniqueMetadata(
+                technique_id="T1190",
+                found=True,
+                platforms=["Linux", "Windows"],
+            )
+        ),
+        settings=SimpleNamespace(llm_timeout_sec=1),
+        trail=SimpleNamespace(step=lambda *args: None),
+    )
+    _, platforms = resolve_ttps(
+        fixture,
+        ["T1190"],
+        scope_text="Linux and Windows web servers",
+        intel_text="A web application has a race condition.",
+    )
+    require(not platforms, "ATT&CK applicability became target platform scope")
 
 
 def check_runtime_contract() -> dict[str, object]:
@@ -25,6 +84,7 @@ def check_runtime_contract() -> dict[str, object]:
     from hecate_runner.config import Settings
     from hecate_runner.sigma_review_gate import discard_rejected_rules
 
+    _check_source_context()
     with tempfile.TemporaryDirectory(prefix="hecate-runtime-check-") as name:
         workspace = Path(name)
         out = workspace / "queries" / "release-check"
@@ -132,6 +192,7 @@ def check_runtime_contract() -> dict[str, object]:
         "artifact_gate": True,
         "platform_scope": True,
         "routing": True,
+        "source_context": True,
         "model_calls": 0,
     }
 

@@ -843,7 +843,7 @@ def test_has_narrative_false_for_bare_ioc_lines() -> None:
     assert has_narrative(content) is False
 
 
-def test_resolve_ttps_excludes_near_universal_platforms_from_union(
+def test_resolve_ttps_requires_scope_even_when_one_technique_is_windows_only(
     settings: Settings,
     mock_hecate: MagicMock,
     file_queue_with_cti: FileQueueProvider,
@@ -883,7 +883,7 @@ def test_resolve_ttps_excludes_near_universal_platforms_from_union(
 
     tactics, platforms = orch._resolve_ttps(["T1021.002", "T1078"])
 
-    assert platforms == ["Windows"]
+    assert platforms == []  # Applicability alone is not source target evidence.
     assert set(tactics) == {
         "lateral-movement",
         "persistence",
@@ -911,9 +911,13 @@ def test_resolve_ttps_translates_pre_platform_to_a_readable_label(
     mock_hecate.lookup_technique.return_value = pre_compromise
     orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=file_queue_with_cti)
 
-    _, platforms = orch._resolve_ttps(["T1598"])
+    facts = {}
+    _, platforms = orch._resolve_ttps(["T1598"], facts=facts)
 
-    assert platforms == ["Pre-Compromise (reconnaissance/targeting -- not endpoint/OS-specific)"]
+    assert platforms == []
+    assert facts["T1598"].platforms == (
+        "Pre-Compromise (reconnaissance/targeting -- not endpoint/OS-specific)",
+    )
 
 
 def test_resolve_ttps_falls_back_to_empty_platforms_when_all_techniques_are_broad(
@@ -1232,8 +1236,8 @@ def test_sigma_uses_cti_techniques_over_the_narrower_hypothesis_list(
 
     assert orch.run_once().outcome == "draft_created"
     payload = mock_hecate.sigma_generator.call_args.args[0]
-    # Every CTI technique first, then the hypothesis's own (T1003.001).
-    assert payload["techniques"] == ["T1071.001", "T1547.001", "T1005", "T1003.001"]
+    # Explicit CTI assertions survive; the unsupported model-only LSASS pick does not.
+    assert payload["techniques"] == ["T1071.001", "T1547.001", "T1005"]
     assert payload["indicators"] == {"hostname": ["api.wiresguard.com"]}
 
 
@@ -1249,7 +1253,7 @@ def test_sigma_drafts_from_the_validated_list_not_the_raw_cti_one(
 
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
-        content="MISP Event: Kunai\nSummary: malware abusing open recursive DNS for exfiltration",
+        content="MISP Event: Kunai\nSummary: malware using DNS tunneling for command and control",
         source="misp",
         metadata={"techniques": ["T1438"]},
     )
@@ -1388,7 +1392,7 @@ def test_resolve_ttps_scopes_platforms_to_what_the_hypothesis_claims(
     assert platforms == ["Windows"]
 
 
-def test_resolve_ttps_keeps_the_union_when_nothing_is_claimed(
+def test_resolve_ttps_leaves_scope_unknown_when_nothing_is_claimed(
     settings: Settings, mock_hecate: MagicMock
 ) -> None:
     mock_hecate.lookup_technique.return_value = TechniqueMetadata(
@@ -1396,7 +1400,7 @@ def test_resolve_ttps_keeps_the_union_when_nothing_is_claimed(
     )
     orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
     _, platforms = orch._resolve_ttps(["T1059"], scope_text="")
-    assert platforms == ["Linux", "Windows"]
+    assert platforms == []
 
 
 def test_platforms_evidenced_in_reads_platform_only_artifacts() -> None:
@@ -1444,7 +1448,7 @@ def test_resolve_ttps_scopes_to_the_intel_when_the_hypothesis_names_no_platform(
     assert platforms == ["Windows"]
 
 
-def test_resolve_ttps_prefers_the_hypothesis_claim_over_the_intel(
+def test_resolve_ttps_prefers_the_source_over_an_unsupported_model_scope(
     settings: Settings, mock_hecate: MagicMock
 ) -> None:
     mock_hecate.lookup_technique.return_value = _BROAD_T1036
@@ -1452,10 +1456,10 @@ def test_resolve_ttps_prefers_the_hypothesis_claim_over_the_intel(
     _, platforms = orch._resolve_ttps(
         ["T1036"], scope_text="on Linux servers", intel_text="dropped a .exe via PowerShell"
     )
-    assert platforms == ["Linux"]
+    assert platforms == ["Windows"]
 
 
-def test_resolve_ttps_keeps_the_union_when_neither_names_a_platform(
+def test_resolve_ttps_leaves_scope_unknown_when_neither_names_a_platform(
     settings: Settings, mock_hecate: MagicMock
 ) -> None:
     mock_hecate.lookup_technique.return_value = _BROAD_T1036
@@ -1463,7 +1467,7 @@ def test_resolve_ttps_keeps_the_union_when_neither_names_a_platform(
     _, platforms = orch._resolve_ttps(
         ["T1036"], scope_text="", intel_text="The VCO web interface was exploited remotely."
     )
-    assert platforms == _BROAD_T1036.platforms
+    assert platforms == []
 
 
 def test_resolve_ttps_rejects_hallucinated_technique_when_claim_is_explicit(
@@ -1505,7 +1509,7 @@ def test_draft_records_cti_techniques_and_scoped_platform(
     )
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
-        content="MISP Event: X\nMITRE ATT&CK Techniques: T1059.003\nSummary: prose",
+        content="MISP Event: X\nMITRE ATT&CK Techniques: T1059.003\nSummary: The malware executes cmd.exe.",
         source="misp",
         metadata={
             "techniques": ["T1059.003", "T1071.001"],
@@ -2114,7 +2118,7 @@ def test_the_intels_attribution_fills_an_empty_actor_cell(
     mock_hecate.hypothesis_generator.return_value = sample_hypothesis
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
-        content="OTX Pulse: DarkMe\nAdversary/Attribution: Water Hydra\nDescription: prose",
+        content="OTX Pulse: DarkMe\nAdversary/Attribution: Water Hydra\nDescription: The loader accesses LSASS memory.",
         source="otx",
     )
 
@@ -2134,7 +2138,7 @@ def test_the_models_actor_is_not_overwritten_by_the_attribution(
     mock_hecate.hypothesis_generator.return_value = sample_hypothesis
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
-        content="OTX Pulse: X\nAdversary/Attribution: TraderTraitor\nDescription: prose",
+        content="OTX Pulse: X\nAdversary/Attribution: TraderTraitor\nDescription: The loader accesses LSASS memory.",
         source="otx",
     )
 

@@ -295,7 +295,7 @@ def test_values_the_model_names_from_the_actors_side_or_another_platform_are_rem
     report = (
         "An exposed directory held the operator's entire working toolkit, and everything here "
         "traces back to the operator's own files. A batch script launches c2_persist.py, the C2 "
-        "server. On each victim the cron job writes /tmp/.cache and runs it."
+        "server. On each Linux victim the cron job writes /tmp/.cache and runs it."
     )
     evidence_hecate.source_evidence.return_value = SourceEvidence(
         url=REPORT, chars=len(report), chunks=1, text=report, artifacts=EVIDENCE.artifacts

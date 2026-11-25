@@ -9,7 +9,7 @@ import pytest
 
 from hecate_runner.config import Settings
 from hecate_runner.cti.base import CTIItem
-from hecate_runner.hecate_client import SigmaResult
+from hecate_runner.hecate_client import SigmaResult, TechniqueMetadata
 from hecate_runner.orchestrator import Orchestrator
 from hecate_runner.trail import LOGGER_NAME
 
@@ -110,7 +110,7 @@ def _run(settings: Settings, hecate: MagicMock, caplog: pytest.LogCaptureFixture
     )
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
-        content="OTX Pulse: VShell\nDescription: a resume loader.", source="otx"
+        content="OTX Pulse: VShell\nDescription: a resume loader executes cmd.exe.", source="otx"
     )
     result = Orchestrator(settings=settings, hecate=hecate, cti_provider=provider).run_once()
     trail = [r.getMessage() for r in caplog.records if r.name == LOGGER_NAME]
@@ -141,6 +141,9 @@ def test_pass2_generates_targeted_rule_for_uncovered_command(
     settings: Settings, mock_hecate: MagicMock, caplog: pytest.LogCaptureFixture, tmp_path
 ) -> None:
     caplog.set_level(logging.INFO)
+    mock_hecate.lookup_technique.side_effect = lambda tid, timeout_sec=None: TechniqueMetadata(
+        technique_id=tid, found=True, tactics=["execution"], platforms=["Containers", "Linux"]
+    )
     mock_hecate.sigma_generator.return_value = SigmaResult(
         success=True,
         rules=[
@@ -160,7 +163,8 @@ def test_pass2_generates_targeted_rule_for_uncovered_command(
     )
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
-        content="OTX Pulse: VShell\nDescription: a resume loader.",
+        content="OTX Pulse: VShell\nDescription: Kubernetes container escape on Linux: "
+        "nsenter -t 1 -m -u -i -n -p /bin/bash",
         source="otx",
     )
     result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
@@ -203,7 +207,7 @@ def test_pass2_generates_targeted_rule_for_uncovered_file_path(
     )
     provider = MagicMock()
     provider.next_item.return_value = CTIItem(
-        content="OTX Pulse: VShell\nDescription: a resume loader with /etc/cron.d/kworker_audit persistence.",
+        content="OTX Pulse: VShell\nDescription: a resume loader installs a cron job at /etc/cron.d/kworker_audit.",
         source="otx",
     )
     result = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=provider).run_once()
