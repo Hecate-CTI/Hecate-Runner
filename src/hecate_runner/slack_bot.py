@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from hecate_runner.config import Settings
+from hecate_runner.slack_auth import SlackAction, SlackAuthorizer
 from hecate_runner.slack_blocks import (
     build_approve_hunt_modal,
     build_pending_hunts_card,
@@ -26,6 +27,7 @@ from hecate_runner.slack_blocks import (
     format_release_diff_message,
 )
 from hecate_runner.workspace_paths import (
+    is_valid_hunt_id,
     query_directory,
     read_artifact,
     workspace_path,
@@ -33,6 +35,87 @@ from hecate_runner.workspace_paths import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def extract_tuning_instruction(text: str) -> str | None:
+    """Extract an explicit Sigma rule tuning instruction from Slack text.
+
+    Returns None if the message is conversational chatter or does not contain
+    an explicit tuning directive.
+    """
+    if not text:
+        return None
+
+    # Strip leading bot mentions e.g. <@U123456>, @hecate
+    cleaned = re.sub(
+        r"^(?:<@[A-Z0-9]+>\s*|@hecate\s*[:,]?\s*)", "", text.strip(), flags=re.IGNORECASE
+    ).strip()
+
+    if not cleaned:
+        return None
+
+    # Check for explicit "tune:" or "tune" prefix first
+    lower = cleaned.lower()
+    if lower.startswith("tune:"):
+        rem = cleaned[5:].strip()
+        rem = re.sub(
+            r"^(?:(?:for|in)\s+)?(?:hunt\s+)?(?:H|HNT)-[A-Z0-9_-]+\s*[:,]?\s*(?:please\s*)?",
+            "",
+            rem,
+            flags=re.IGNORECASE,
+        ).strip()
+        return rem if rem else None
+
+    if lower.startswith("tune "):
+        rem = cleaned[5:].strip()
+        rem = re.sub(
+            r"^(?:(?:for|in)\s+)?(?:hunt\s+)?(?:H|HNT)-[A-Z0-9_-]+\s*[:,]?\s*(?:please\s*)?",
+            "",
+            rem,
+            flags=re.IGNORECASE,
+        ).strip()
+        return rem if rem else None
+
+    # Strip optional leading hunt target clause or polite filler, e.g.
+    # "for H-0702, please ", "in H-0702: ", "for hunt H-0702: ", "H-0702: ", "please "
+    cleaned = re.sub(
+        r"^(?:(?:for|in)\s+)?(?:hunt\s+)?(?:H|HNT)-[A-Z0-9_-]+\s*[:,]?\s*(?:please\s*)?|^please\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    if not cleaned:
+        return None
+
+    lower = cleaned.lower()
+    if lower.startswith("tune:"):
+        rem = cleaned[5:].strip()
+        return rem if rem else None
+    if lower.startswith("tune "):
+        rem = cleaned[5:].strip()
+        return rem if rem else None
+
+    # Direct tuning verbs / keywords
+    verbs = (
+        "exclude:",
+        "exclude ",
+        "filter:",
+        "filter ",
+        "suppress:",
+        "suppress ",
+        "whitelist:",
+        "whitelist ",
+        "allowlist:",
+        "allowlist ",
+        "add:",
+        "add ",
+    )
+    for v in verbs:
+        if lower.startswith(v):
+            return cleaned
+
+    return None
 
 
 def deploy_queries_for_hunt(
@@ -51,9 +134,14 @@ def deploy_queries_for_hunt(
         pass
 
     query_dir = query_directory(Path(workspace), hunt_id)
-    if not query_dir.exists():
-        log.warning("Query directory not found for %s at %s", hunt_id, query_dir)
+
+    if not query_dir.exists() or query_dir.is_symlink() or not query_dir.is_dir():
+        log.warning("Query directory not found or unsafe for %s at %s", hunt_id, query_dir)
         return []
+
+    expected_root = workspace_path(Path(workspace), "queries").resolve()
+    if not query_dir.resolve().is_relative_to(expected_root):
+        raise ValueError(f"Query directory escapes queries root: {query_dir}")
 
     from hecate_agent.api import deploy_transpiled_query, get_query_deployer
 
@@ -69,6 +157,10 @@ def deploy_queries_for_hunt(
     results: list[dict[str, Any]] = []
     with get_query_deployer() as deployer:
         for q_file in sorted(query_dir.iterdir()):
+            if q_file.is_symlink():
+                raise ValueError(f"Refusing symlinked query file: {q_file}")
+            if not q_file.is_file():
+                continue
             tgt = query_exts.get(q_file.suffix.lower())
             if not tgt:
                 continue
@@ -116,9 +208,14 @@ def undeploy_queries_for_hunt(
         pass
 
     query_dir = query_directory(Path(workspace), hunt_id)
-    if not query_dir.exists():
-        log.warning("Query directory not found for %s at %s", hunt_id, query_dir)
+
+    if not query_dir.exists() or query_dir.is_symlink() or not query_dir.is_dir():
+        log.warning("Query directory not found or unsafe for %s at %s", hunt_id, query_dir)
         return []
+
+    expected_root = workspace_path(Path(workspace), "queries").resolve()
+    if not query_dir.resolve().is_relative_to(expected_root):
+        raise ValueError(f"Query directory escapes queries root: {query_dir}")
 
     from hecate_agent.api import get_query_deployer, undeploy_transpiled_query
 
@@ -134,6 +231,10 @@ def undeploy_queries_for_hunt(
     results: list[dict[str, Any]] = []
     with get_query_deployer() as deployer:
         for q_file in sorted(query_dir.iterdir()):
+            if q_file.is_symlink():
+                raise ValueError(f"Refusing symlinked query file: {q_file}")
+            if not q_file.is_file():
+                continue
             tgt = query_exts.get(q_file.suffix.lower())
             if not tgt:
                 continue
@@ -191,9 +292,14 @@ def sync_queries_for_hunt(
         pass
 
     query_dir = query_directory(Path(workspace), hunt_id)
-    if not query_dir.exists():
-        log.warning("Query directory not found for %s at %s", hunt_id, query_dir)
+
+    if not query_dir.exists() or query_dir.is_symlink() or not query_dir.is_dir():
+        log.warning("Query directory not found or unsafe for %s at %s", hunt_id, query_dir)
         return []
+
+    expected_root = workspace_path(Path(workspace), "queries").resolve()
+    if not query_dir.resolve().is_relative_to(expected_root):
+        raise ValueError(f"Query directory escapes queries root: {query_dir}")
 
     from hecate_agent.api import get_query_deployer, sync_transpiled_query
 
@@ -209,6 +315,10 @@ def sync_queries_for_hunt(
     results: list[dict[str, Any]] = []
     with get_query_deployer() as deployer:
         for q_file in sorted(query_dir.iterdir()):
+            if q_file.is_symlink():
+                raise ValueError(f"Refusing symlinked query file: {q_file}")
+            if not q_file.is_file():
+                continue
             tgt = query_exts.get(q_file.suffix.lower())
             if not tgt:
                 continue
@@ -245,6 +355,9 @@ def sync_queries_for_hunt(
 
 def promote_hunt(workspace: Path, hunt_id: str) -> dict[str, Any]:
     """Promote a planning hunt to active status in the workspace."""
+    if not is_valid_hunt_id(hunt_id):
+        return {"ok": False, "hunt_id": hunt_id, "error": f"Invalid hunt ID: {hunt_id}"}
+
     from hecate_runner.lifecycle import find_hunt_path
 
     hunt_path = find_hunt_path(workspace, hunt_id)
@@ -291,6 +404,9 @@ def park_hunt(
     workspace: Path, hunt_id: str, reason: str = "Analyst suppressed via Slack"
 ) -> dict[str, Any]:
     """Mark a hunt bundle as suppressed / parked in the workspace."""
+    if not is_valid_hunt_id(hunt_id):
+        return {"ok": False, "hunt_id": hunt_id, "error": f"Invalid hunt ID: {hunt_id}"}
+
     from hecate_runner.lifecycle import find_hunt_path
 
     hunt_path = find_hunt_path(workspace, hunt_id)
@@ -486,6 +602,9 @@ def review_hunt(
     whose publish check has a blocking finding, unless the reviewer supplies an
     override that is stored with their name.
     """
+    if not is_valid_hunt_id(hunt_id):
+        return {"ok": False, "hunt_id": hunt_id, "error": f"Invalid hunt ID: {hunt_id}"}
+
     from hecate_runner.lifecycle import find_hunt_path, parse_hunt_frontmatter
     from hecate_runner.publish_check import evaluate_saved_hunt, findings_json
 
@@ -555,6 +674,9 @@ def publish_reviewed_hunt(
     The sign-off is bound to the snapshot's digest, so it must be taken after
     the review decision is written into the hunt's frontmatter.
     """
+    if not is_valid_hunt_id(hunt_id):
+        return {"ok": False, "error": f"Invalid hunt ID: {hunt_id}"}
+
     from hecate_runner.github_publisher import _snapshot_bundle, enqueue_hunt, sync_outbox
     from hecate_runner.public_review import approve_public_review, prepare_public_review
 
@@ -582,12 +704,28 @@ def publish_reviewed_hunt(
 
 def replay_hunt_purple_team(workspace: Path | str, hunt_id: str) -> dict[str, Any]:
     """Replay Sigma rules for a hunt against synthetic adversary telemetry."""
+    if not is_valid_hunt_id(hunt_id):
+        return {"ok": False, "hunt_id": hunt_id, "error": f"Invalid hunt ID: {hunt_id}"}
+
     workspace = Path(workspace)
-    query_dir = query_directory(Path(workspace), hunt_id)
-    sigma_files = (
-        sorted(list(query_dir.glob("*.yml")) + list(query_dir.glob("*.yaml")))
-        if query_dir.exists()
-        else []
+    try:
+        query_dir = query_directory(Path(workspace), hunt_id)
+    except ValueError as exc:
+        return {"ok": False, "hunt_id": hunt_id, "error": str(exc)}
+
+    if not query_dir.exists() or query_dir.is_symlink() or not query_dir.is_dir():
+        return {
+            "ok": False,
+            "hunt_id": hunt_id,
+            "error": f"No Sigma rules found in queries/{hunt_id}",
+        }
+
+    sigma_files = sorted(
+        [
+            f
+            for f in list(query_dir.glob("*.yml")) + list(query_dir.glob("*.yaml"))
+            if not f.is_symlink() and f.is_file()
+        ]
     )
 
     if not sigma_files:
@@ -748,6 +886,7 @@ class SlackBotService:
 
     def __init__(self, settings: Settings | None = None, app: Any = None):
         self.settings = settings or Settings()
+        self.authorizer = SlackAuthorizer.from_settings(self.settings)
         self._app = app
         self._handler: Any = None
         self._thread_hunt_map: dict[str, str] = {}
@@ -789,6 +928,18 @@ class SlackBotService:
         def handle_approve(ack: Any, body: dict[str, Any], client: Any) -> None:
             ack()
             hunt_id = str(body.get("actions", [{}])[0].get("value") or "").strip()
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.REVIEW,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=hunt_id,
+                username=username,
+            )
+            if not decision.allowed:
+                log.warning("Slack authorization denied for handle_approve: %s", decision.reason)
+                return
             message = body.get("message", {})
             metadata = {
                 "hunt_id": hunt_id,
@@ -805,6 +956,26 @@ class SlackBotService:
             thread_ts = body.get("message", {}).get("ts") or body.get("container", {}).get(
                 "message_ts"
             )
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.DEPLOY,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=hunt_id,
+                username=username,
+            )
+            if not decision.allowed:
+                say(
+                    text=f"🚫 *Access Denied:* <@{actor}> is not authorized to deploy queries ({decision.reason}).",
+                    thread_ts=thread_ts,
+                )
+                return
+
+            if not is_valid_hunt_id(hunt_id):
+                say(text=f"⚠️ *Invalid hunt ID:* `{hunt_id}`", thread_ts=thread_ts)
+                return
+
             user_info = body.get("user", {})
             user_name = user_info.get("username") or user_info.get("name") or "analyst"
 
@@ -854,6 +1025,26 @@ class SlackBotService:
             thread_ts = body.get("message", {}).get("ts") or body.get("container", {}).get(
                 "message_ts"
             )
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.DEPLOY,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=hunt_id,
+                username=username,
+            )
+            if not decision.allowed:
+                say(
+                    text=f"🚫 *Access Denied:* <@{actor}> is not authorized to reconcile queries ({decision.reason}).",
+                    thread_ts=thread_ts,
+                )
+                return
+
+            if not is_valid_hunt_id(hunt_id):
+                say(text=f"⚠️ *Invalid hunt ID:* `{hunt_id}`", thread_ts=thread_ts)
+                return
+
             user_info = body.get("user", {})
             user_name = user_info.get("username") or user_info.get("name") or "analyst"
 
@@ -908,6 +1099,26 @@ class SlackBotService:
             thread_ts = body.get("message", {}).get("ts") or body.get("container", {}).get(
                 "message_ts"
             )
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.HUNT,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=hunt_id,
+                username=username,
+            )
+            if not decision.allowed:
+                say(
+                    text=f"🚫 *Access Denied:* <@{actor}> is not authorized to run purple team replay ({decision.reason}).",
+                    thread_ts=thread_ts,
+                )
+                return
+
+            if not is_valid_hunt_id(hunt_id):
+                say(text=f"⚠️ *Invalid hunt ID:* `{hunt_id}`", thread_ts=thread_ts)
+                return
+
             user_info = body.get("user", {})
             user_name = user_info.get("username") or user_info.get("name") or "analyst"
 
@@ -935,6 +1146,26 @@ class SlackBotService:
             thread_ts = body.get("message", {}).get("ts") or body.get("container", {}).get(
                 "message_ts"
             )
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.REVIEW,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=hunt_id,
+                username=username,
+            )
+            if not decision.allowed:
+                say(
+                    text=f"🚫 *Access Denied:* <@{actor}> is not authorized to park or suppress hunts ({decision.reason}).",
+                    thread_ts=thread_ts,
+                )
+                return
+
+            if not is_valid_hunt_id(hunt_id):
+                say(text=f"⚠️ *Invalid hunt ID:* `{hunt_id}`", thread_ts=thread_ts)
+                return
+
             user_info = body.get("user", {})
             user_name = user_info.get("username") or user_info.get("name") or "analyst"
 
@@ -960,6 +1191,22 @@ class SlackBotService:
             thread_ts = body.get("message", {}).get("ts") or body.get("container", {}).get(
                 "message_ts"
             )
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.SWEEP,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=sweep_id,
+                username=username,
+            )
+            if not decision.allowed:
+                say(
+                    text=f"🚫 *Access Denied:* <@{actor}> is not authorized to approve hunt sweeps ({decision.reason}).",
+                    thread_ts=thread_ts,
+                )
+                return
+
             user_info = body.get("user", {})
             user_name = user_info.get("username") or user_info.get("name") or "analyst"
             user_id = str(user_info.get("id") or "unknown")
@@ -993,6 +1240,22 @@ class SlackBotService:
             thread_ts = body.get("message", {}).get("ts") or body.get("container", {}).get(
                 "message_ts"
             )
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.SWEEP,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=sweep_id,
+                username=username,
+            )
+            if not decision.allowed:
+                say(
+                    text=f"🚫 *Access Denied:* <@{actor}> is not authorized to reject hunt sweeps ({decision.reason}).",
+                    thread_ts=thread_ts,
+                )
+                return
+
             user_info = body.get("user", {})
             user_name = user_info.get("username") or user_info.get("name") or "analyst"
             user_id = str(user_info.get("id") or "unknown")
@@ -1015,6 +1278,22 @@ class SlackBotService:
             thread_ts = body.get("message", {}).get("ts") or body.get("container", {}).get(
                 "message_ts"
             )
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.TUNE,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=finding_id,
+                username=username,
+            )
+            if not decision.allowed:
+                say(
+                    text=f"🚫 *Access Denied:* <@{actor}> is not authorized to tune detection rules ({decision.reason}).",
+                    thread_ts=thread_ts,
+                )
+                return
+
             user_info = body.get("user", {})
             user_name = user_info.get("username") or user_info.get("name") or "analyst"
             user_id = str(user_info.get("id") or "unknown")
@@ -1111,6 +1390,20 @@ class SlackBotService:
         def handle_pending_approve(ack: Any, body: dict[str, Any], client: Any) -> None:
             ack()
             hunt_id = str(body.get("actions", [{}])[0].get("value") or "").strip()
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.REVIEW,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=hunt_id,
+                username=username,
+            )
+            if not decision.allowed:
+                log.warning(
+                    "Slack authorization denied for handle_pending_approve: %s", decision.reason
+                )
+                return
             metadata = {"hunt_id": hunt_id, "response_url": body.get("response_url")}
             _open_approve_modal(client, body["trigger_id"], hunt_id, metadata)
 
@@ -1120,6 +1413,24 @@ class SlackBotService:
         ) -> None:
             metadata = json.loads(view.get("private_metadata") or "{}")
             hunt_id = str(metadata.get("hunt_id") or "")
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.REVIEW,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id or metadata.get("channel"),
+                target=hunt_id,
+                username=username,
+            )
+            if not decision.allowed:
+                errors = (
+                    {"release_checks": f"Access Denied: {decision.reason}"}
+                    if self.settings.github_publishing_enabled
+                    else {"publish_override": f"Access Denied: {decision.reason}"}
+                )
+                ack(response_action="errors", errors=errors)
+                return
+
             values = view.get("state", {}).get("values", {})
             publishing = self.settings.github_publishing_enabled
             rights = ""
@@ -1206,7 +1517,20 @@ class SlackBotService:
         def handle_release_diff(ack: Any, body: dict[str, Any], respond: Any) -> None:
             ack()
             hunt_id = str(body.get("actions", [{}])[0].get("value") or "").strip().upper()
-            if not hunt_id.startswith("H-"):
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.READ,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=hunt_id,
+                username=username,
+            )
+            if not decision.allowed:
+                respond(text=f"🚫 *Access Denied:* {decision.reason}", response_type="ephemeral")
+                return
+
+            if not is_valid_hunt_id(hunt_id):
                 respond(text="⚠️ Invalid hunt id for release diff.", response_type="ephemeral")
                 return
             from hecate_runner.github_publisher import diff_release_snapshots
@@ -1218,6 +1542,20 @@ class SlackBotService:
         def handle_pending_reject(ack: Any, body: dict[str, Any], client: Any) -> None:
             ack()
             hunt_id = str(body.get("actions", [{}])[0].get("value") or "").strip()
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.REVIEW,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=hunt_id,
+                username=username,
+            )
+            if not decision.allowed:
+                log.warning(
+                    "Slack authorization denied for handle_pending_reject: %s", decision.reason
+                )
+                return
             metadata = json.dumps({"hunt_id": hunt_id, "response_url": body.get("response_url")})
             client.views_open(
                 trigger_id=body["trigger_id"], view=build_reject_hunt_modal(hunt_id, metadata)
@@ -1227,6 +1565,22 @@ class SlackBotService:
         def handle_reject_submission(ack: Any, body: dict[str, Any], view: dict[str, Any]) -> None:
             metadata = json.loads(view.get("private_metadata") or "{}")
             hunt_id = str(metadata.get("hunt_id") or "")
+            actor, username, team_id, channel_id = self.authorizer.extract_identity(body)
+            decision = self.authorizer.authorize(
+                SlackAction.REVIEW,
+                actor,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=hunt_id,
+                username=username,
+            )
+            if not decision.allowed:
+                ack(
+                    response_action="errors",
+                    errors={"reject_reason": f"Access Denied: {decision.reason}"},
+                )
+                return
+
             reason = str(
                 view.get("state", {})
                 .get("values", {})
@@ -1271,9 +1625,56 @@ class SlackBotService:
             tokens = text.split()
             subcmd = tokens[0].lower() if tokens else "help"
             user_id = str(body.get("user_id") or "analyst")
+            user_name = body.get("user_name")
             channel_id = str(body.get("channel_id") or "")
+            channel_name = body.get("channel_name")
+            team_id = str(body.get("team_id") or "")
 
             log.info("Slack slash command /hecate '%s' from %s in %s", text, user_id, channel_id)
+
+            if subcmd in {
+                "help",
+                "-h",
+                "--help",
+                "status",
+                "pending",
+                "review",
+                "siem-status",
+                "siem",
+                "history",
+                "drift-history",
+            }:
+                action = SlackAction.READ
+            elif subcmd in {
+                "deploy",
+                "undeploy",
+                "sync",
+                "reconcile",
+                "reconcile-queries",
+                "audit-siem",
+                "siem-audit",
+            }:
+                action = SlackAction.DEPLOY
+            elif subcmd in {"rerun", "hunt"}:
+                action = SlackAction.HUNT
+            elif subcmd == "tune":
+                action = SlackAction.TUNE
+            else:
+                action = SlackAction.READ
+
+            target_arg = tokens[1] if len(tokens) > 1 else None
+            decision = self.authorizer.authorize(
+                action,
+                user_id,
+                team_id=team_id,
+                channel_id=channel_id,
+                channel_name=channel_name,
+                target=target_arg,
+                username=user_name,
+            )
+            if not decision.allowed:
+                respond(text=f"🚫 *Access Denied:* {decision.reason}")
+                return
 
             if subcmd in {"help", "-h", "--help"}:
                 card = build_slash_help_card()
@@ -1301,6 +1702,12 @@ class SlackBotService:
                     return
 
                 hunt_id = tokens[1].upper()
+                if not is_valid_hunt_id(hunt_id):
+                    respond(
+                        text=f"⚠️ *Invalid hunt ID:* `{hunt_id}`. Hunt IDs must match `H-<digits>` or `HNT-<digits>`."
+                    )
+                    return
+
                 target = tokens[2].lower() if len(tokens) > 2 else None
                 is_dry_run = getattr(self.settings, "siem_deploy_dry_run", True)
                 mode_str = "Simulated (Dry-Run)" if is_dry_run else "Live API Push"
@@ -1344,6 +1751,12 @@ class SlackBotService:
                     return
 
                 hunt_id = tokens[1].upper()
+                if not is_valid_hunt_id(hunt_id):
+                    respond(
+                        text=f"⚠️ *Invalid hunt ID:* `{hunt_id}`. Hunt IDs must match `H-<digits>` or `HNT-<digits>`."
+                    )
+                    return
+
                 target = tokens[2].lower() if len(tokens) > 2 else None
                 is_dry_run = getattr(self.settings, "siem_deploy_dry_run", True)
                 mode_str = "Simulated (Dry-Run)" if is_dry_run else "Live Teardown"
@@ -1387,6 +1800,12 @@ class SlackBotService:
                     return
 
                 hunt_id = tokens[1].upper()
+                if not is_valid_hunt_id(hunt_id):
+                    respond(
+                        text=f"⚠️ *Invalid hunt ID:* `{hunt_id}`. Hunt IDs must match `H-<digits>` or `HNT-<digits>`."
+                    )
+                    return
+
                 target = tokens[2].lower() if len(tokens) > 2 else None
                 is_dry_run = getattr(self.settings, "siem_deploy_dry_run", True)
                 mode_str = "Simulated (Dry-Run)" if is_dry_run else "Live API Sync"
@@ -1434,6 +1853,12 @@ class SlackBotService:
                     return
 
                 hunt_id = tokens[1].upper()
+                if not is_valid_hunt_id(hunt_id):
+                    respond(
+                        text=f"⚠️ *Invalid hunt ID:* `{hunt_id}`. Hunt IDs must match `H-<digits>` or `HNT-<digits>`."
+                    )
+                    return
+
                 target = tokens[2].lower() if len(tokens) > 2 else None
                 is_dry_run = getattr(self.settings, "siem_deploy_dry_run", True)
                 mode_str = "Simulated (Dry-Run)" if is_dry_run else "Live Push"
@@ -1517,6 +1942,12 @@ class SlackBotService:
                     return
 
                 hunt_id = tokens[1].upper()
+                if not is_valid_hunt_id(hunt_id):
+                    respond(
+                        text=f"⚠️ *Invalid hunt ID:* `{hunt_id}`. Hunt IDs must match `H-<digits>` or `HNT-<digits>`."
+                    )
+                    return
+
                 res = replay_hunt_purple_team(self.settings.hecate_workspace, hunt_id)
                 if res.get("ok"):
                     msg = (
@@ -1581,6 +2012,12 @@ class SlackBotService:
                     return
 
                 hunt_id = tokens[1].upper()
+                if not is_valid_hunt_id(hunt_id):
+                    respond(
+                        text=f"⚠️ *Invalid hunt ID:* `{hunt_id}`. Hunt IDs must match `H-<digits>` or `HNT-<digits>`."
+                    )
+                    return
+
                 instruction = " ".join(tokens[2:])
                 from hecate_runner.rule_tuner import RuleTuner
 
@@ -1659,12 +2096,46 @@ class SlackBotService:
             if not text:
                 return
 
-            user_id = str(event.get("user") or "analyst")
+            # Require explicit tuning commands instead of treating every reply as an instruction
+            tuning_instruction = extract_tuning_instruction(text)
+            if tuning_instruction is None:
+                if not is_mention:
+                    return
+                cleaned = re.sub(
+                    r"^(?:<@[A-Z0-9]+>\s*|@hecate\s*[:,]?\s*)", "", text, flags=re.IGNORECASE
+                ).strip()
+                if cleaned.lower() in {"help", "-h", "--help"}:
+                    say(
+                        text=(
+                            "ℹ️ *Hecate HITL Rule Tuning Commands:*\n"  # noqa: RUF001
+                            "• `tune: exclude svchost.exe with parent services.exe`\n"
+                            "• `exclude: Image == 'powershell.exe'`\n"
+                            "• `filter: CommandLine contains '/test'`\n"
+                            "• `@hecate tune H-0100 exclude cmd.exe`"
+                        ),
+                        thread_ts=thread_ts,
+                    )
+                    return
+                say(
+                    text=(
+                        "⚠️ *Unrecognized instruction.* To tune a detection rule, please use an explicit command like:\n"
+                        "• `tune: exclude svchost.exe with parent services.exe`\n"
+                        "• `exclude: Image == 'powershell.exe'`\n"
+                        "• `filter: CommandLine contains '/update'`\n"
+                        "• `@hecate tune H-0100 exclude svchost.exe`"
+                    ),
+                    thread_ts=thread_ts,
+                )
+                return
+
+            user_id, username, team_id, channel_id = self.authorizer.extract_identity(
+                body, event=event
+            )
 
             # Resolve hunt ID
             hunt_id = self._thread_hunt_map.get(thread_ts)
             if not hunt_id:
-                h_match = re.search(r"(?i)\b(H-\d+)\b", text)
+                h_match = re.search(r"(?i)\b((?:H|HNT)-[A-Z0-9_-]+)\b", text)
                 if h_match:
                     hunt_id = h_match.group(1).upper()
 
@@ -1675,7 +2146,7 @@ class SlackBotService:
                     messages = resp.get("messages", [])
                     if messages:
                         parent_text = messages[0].get("text", "")
-                        h_match = re.search(r"(?i)\b(H-\d+)\b", parent_text)
+                        h_match = re.search(r"(?i)\b((?:H|HNT)-[A-Z0-9_-]+)\b", parent_text)
                         if h_match:
                             hunt_id = h_match.group(1).upper()
                             self._thread_hunt_map[thread_ts] = hunt_id
@@ -1694,11 +2165,35 @@ class SlackBotService:
                     )
                 return
 
-            log.info("Conversational HITL rule tuning for %s from %s: '%s'", hunt_id, user_id, text)
+            if not is_valid_hunt_id(hunt_id):
+                say(text=f"⚠️ *Invalid hunt ID:* `{hunt_id}`", thread_ts=thread_ts)
+                return
+
+            decision = self.authorizer.authorize(
+                SlackAction.TUNE,
+                user_id,
+                team_id=team_id,
+                channel_id=channel_id,
+                target=hunt_id,
+                username=username,
+            )
+            if not decision.allowed:
+                say(
+                    text=f"🚫 *Access Denied:* <@{user_id}> is not authorized to tune detection rules ({decision.reason}).",
+                    thread_ts=thread_ts,
+                )
+                return
+
+            log.info(
+                "Conversational HITL rule tuning for %s from %s: '%s'",
+                hunt_id,
+                user_id,
+                tuning_instruction,
+            )
             from hecate_runner.rule_tuner import RuleTuner
 
             tuner = RuleTuner(self.settings.hecate_workspace)
-            res = tuner.tune_hunt_rule(hunt_id, text)
+            res = tuner.tune_hunt_rule(hunt_id, tuning_instruction)
 
             if res.ok:
                 purple_res = replay_hunt_purple_team(self.settings.hecate_workspace, hunt_id)
@@ -1730,7 +2225,7 @@ class SlackBotService:
                 targets_str = ", ".join(f"`{t}`" for t in res.transpiled_targets) or "None"
                 msg = (
                     f"🛠️ *Sigma Rule Tuned & Re-Transpiled for `{hunt_id}`*\n"
-                    f"• *Analyst Instruction:* _{text}_\n"
+                    f"• *Analyst Instruction:* _{tuning_instruction}_\n"
                     f"• *Action Taken:* {res.action_summary}\n"
                     f"• *Updated Telemetry Targets:* {targets_str}\n"
                     f"• *Purple-Team Validation:* {purple_summary}"
