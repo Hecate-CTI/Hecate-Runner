@@ -922,6 +922,33 @@ class Settings(BaseSettings):
         description="Slack channel for Threat Hunting daily digests and campaign outcomes.",
     )
 
+    # --- Slack Authorization & Role Gates ------------------------------------
+    slack_auth_enabled: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_SLACK_AUTH_ENABLED",
+        description="Enforce deny-by-default role-based authorization for Slack commands, buttons, and thread events.",
+    )
+    slack_allowed_teams: list[str] = Field(
+        default_factory=list,
+        alias="HECATE_RUNNER_SLACK_ALLOWED_TEAMS",
+        description="Allowed Slack workspace/team IDs (e.g. T01234567).",
+    )
+    slack_allowed_channels: list[str] = Field(
+        default_factory=list,
+        alias="HECATE_RUNNER_SLACK_ALLOWED_CHANNELS",
+        description="Allowed Slack channel IDs (e.g. C01234567) or channel names (e.g. #threat-hunting).",
+    )
+    slack_allowed_users: list[str] = Field(
+        default_factory=list,
+        alias="HECATE_RUNNER_SLACK_ALLOWED_USERS",
+        description="Allowed Slack user IDs (e.g. U01234567) or usernames for read, review, and tune actions.",
+    )
+    slack_deploy_users: list[str] = Field(
+        default_factory=list,
+        alias="HECATE_RUNNER_SLACK_DEPLOY_USERS",
+        description="Allowed Slack user IDs or usernames permitted to deploy queries, undeploy, sync, or execute sweeps.",
+    )
+
     # --- Auxiliary CTI & Enrichment keys --------------------------------------
     urlscan_api_key: str | None = Field(
         default=None,
@@ -1740,7 +1767,14 @@ class Settings(BaseSettings):
         return v.expanduser().resolve()
 
     @field_validator(
-        "bas_allowed_hosts", "bas_allowed_accounts", "bas_auto_techniques", mode="after"
+        "bas_allowed_hosts",
+        "bas_allowed_accounts",
+        "bas_auto_techniques",
+        "slack_allowed_teams",
+        "slack_allowed_channels",
+        "slack_allowed_users",
+        "slack_deploy_users",
+        mode="after",
     )
     @classmethod
     def _parse_comma_or_json_list(cls, v: Any) -> list[str]:

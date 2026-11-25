@@ -92,16 +92,19 @@ def normalize_lifecycle_state(status: str) -> str:
 
 def find_hunt_path(workspace: Path, hunt_id: str) -> Path | None:
     """Locate the markdown file for a given hunt ID in workspace/hunts."""
-    hunt_id = normalize_hunt_id(hunt_id)
+    norm_id = normalize_hunt_id(hunt_id)
     hunts_dir = workspace_path(workspace, "hunts")
-    if not hunts_dir.exists():
+    if not hunts_dir.exists() or hunts_dir.is_symlink() or not hunts_dir.is_dir():
         return None
-    matches = sorted(hunts_dir.glob(f"**/{hunt_id}.md"))
-    return (
-        workspace_path(workspace, matches[0].relative_to(workspace.resolve()).as_posix())
-        if matches
-        else None
-    )
+    matches = sorted(hunts_dir.glob(f"**/{norm_id}.md"))
+    for match in matches:
+        if match.is_symlink() or not match.is_file():
+            continue
+        try:
+            return workspace_path(workspace, match.relative_to(workspace.resolve()).as_posix())
+        except ValueError:
+            continue
+    return None
 
 
 def parse_hunt_frontmatter(content: str) -> tuple[dict[str, Any], str, str]:
