@@ -98,6 +98,23 @@ _BENIGN_DOMAINS = {
     "ubuntu.com",
     "debian.org",
     "kernel.org",
+    "shields.io",
+    "img.shields.io",
+    "badge.fury.io",
+    "badgen.net",
+    "codecov.io",
+    "coveralls.io",
+    "travis-ci.org",
+    "travis-ci.com",
+    "readthedocs.org",
+    "readthedocs.io",
+    "user-images.githubusercontent.com",
+    "githubassets.com",
+    "gravatar.com",
+    "pypi.org",
+    "npmjs.com",
+    "pkg.go.dev",
+    "crates.io",
 }
 
 #: Known file extensions mistaken for domains
@@ -163,7 +180,151 @@ _IGNORE_EXTENSIONS = {
     ".cmd",
     ".vbs",
     ".getdecoder",
+    ".svg",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".ico",
+    ".webp",
+    ".bmp",
+    ".tiff",
+    ".tif",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".eot",
+    ".mp4",
+    ".webm",
+    ".mp3",
+    ".wav",
 }
+
+#: Valid public top-level domains for network indicator filtering
+_VALID_TLDS = frozenset(
+    {
+        "com",
+        "org",
+        "net",
+        "edu",
+        "gov",
+        "mil",
+        "info",
+        "biz",
+        "shop",
+        "top",
+        "xyz",
+        "site",
+        "online",
+        "club",
+        "vip",
+        "live",
+        "app",
+        "dev",
+        "pro",
+        "win",
+        "work",
+        "cloud",
+        "space",
+        "link",
+        "one",
+        "click",
+        "tech",
+        "store",
+        "news",
+        "blog",
+        "icu",
+        "fun",
+        "digital",
+        "security",
+        "agency",
+        "center",
+        "io",
+        "ai",
+        "me",
+        "cc",
+        "tv",
+        "to",
+        "is",
+        "pw",
+        "ws",
+        "uk",
+        "de",
+        "cn",
+        "ru",
+        "jp",
+        "kr",
+        "in",
+        "br",
+        "ca",
+        "au",
+        "fr",
+        "nl",
+        "se",
+        "no",
+        "fi",
+        "es",
+        "it",
+        "pl",
+        "ch",
+        "at",
+        "be",
+        "cz",
+        "ro",
+        "ua",
+        "za",
+        "mx",
+        "ar",
+        "cl",
+        "co",
+        "id",
+        "my",
+        "th",
+        "vn",
+        "ph",
+        "sg",
+        "nz",
+        "kg",
+        "su",
+        "tk",
+        "ml",
+        "ga",
+        "cf",
+        "gq",
+        "onion",
+        "host",
+        "website",
+        "red",
+        "buzz",
+        "monster",
+        "cyou",
+        "life",
+        "world",
+        "quest",
+        "stream",
+        "bid",
+        "loan",
+        "fit",
+        "download",
+        "racing",
+        "trade",
+        "date",
+        "faith",
+        "party",
+        "review",
+        "science",
+        "accountant",
+        "cricket",
+        "webcam",
+        "casa",
+        "bond",
+        "lat",
+        "asia",
+        "eu",
+        "us",
+    }
+)
 
 #: Reserved or special-use domain suffixes to ignore as external IOCs
 _SPECIAL_USE_TLDS = {
@@ -269,12 +430,22 @@ def _is_public_ip(ip_str: str) -> bool:
 
 def _is_c2_correlation_candidate(ioc: str) -> bool:
     """True if ioc is a valid external candidate for linking separate campaigns as shared C2 infrastructure."""
+    cleaned = ioc.strip()
     try:
-        ip = ipaddress.ip_address(ioc.strip())
+        ip = ipaddress.ip_address(cleaned)
         if str(ip) in _PLACEHOLDER_OR_RESOLVER_IPS:
             return False
         return not any(ip in net for net in _DOC_OR_BENCHMARK_NETWORKS)
     except ValueError:
+        if not _is_relevant_domain(cleaned):
+            return False
+        try:
+            from hecate_agent.core.provenance import is_dual_use
+
+            if is_dual_use(cleaned):
+                return False
+        except ImportError:
+            pass
         return True
 
 
@@ -294,9 +465,11 @@ def _is_relevant_domain(domain_str: str) -> bool:
     # Avoid IP fragments parsed as domains
     if all(p.isdigit() for p in parts):
         return False
-    # TLD must be valid alphabetic or punycode label (excludes version strings like 5.6-7.4)
+    # TLD must be a known public TLD or punycode label (excludes version strings and code identifiers like request.state)
     tld = parts[-1]
-    return bool(re.match(r"^(?:[a-zA-Z]{2,}|xn--[a-zA-Z0-9]+)$", tld))
+    if tld.startswith("xn--"):
+        return True
+    return tld in _VALID_TLDS
 
 
 def _extract_cve_years(cves: set[str]) -> set[int]:
