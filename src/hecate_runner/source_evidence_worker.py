@@ -56,7 +56,7 @@ def _get_allowed_endpoints() -> set[tuple[str, int]]:
                 allowed.add((host, port))
                 try:
                     for res in _ORIG_GETADDRINFO(host, port, proto=socket.IPPROTO_TCP):
-                        allowed.add((res[4][0].lower(), port))
+                        allowed.add((str(res[4][0]).lower(), port))
                 except Exception:
                     pass
         except Exception:
@@ -130,7 +130,7 @@ def _check_socket_destination(address: Any) -> None:
         return
 
     for info in infos:
-        resolved_ip_str = info[4][0]
+        resolved_ip_str = str(info[4][0])
         if (resolved_ip_str.lower(), port) in allowed_endpoints:
             continue
         try:
@@ -162,16 +162,16 @@ def install_socket_egress_filter(force: bool = False) -> None:
                 return errno.EPERM
         return _ORIG_CONNECT_EX(self, address)
 
-    socket.socket.connect = filtered_connect  # type: ignore[assignment]
-    socket.socket.connect_ex = filtered_connect_ex  # type: ignore[assignment]
+    socket.socket.connect = filtered_connect  # type: ignore[assignment,method-assign]
+    socket.socket.connect_ex = filtered_connect_ex  # type: ignore[assignment,method-assign]
     _EGRESS_FILTER_INSTALLED = True
 
 
 def uninstall_socket_egress_filter() -> None:
     """Uninstall the socket egress filter and restore original socket connect methods."""
     global _EGRESS_FILTER_INSTALLED
-    socket.socket.connect = _ORIG_CONNECT  # type: ignore[assignment]
-    socket.socket.connect_ex = _ORIG_CONNECT_EX  # type: ignore[assignment]
+    socket.socket.connect = _ORIG_CONNECT  # type: ignore[method-assign]
+    socket.socket.connect_ex = _ORIG_CONNECT_EX  # type: ignore[method-assign]
     _EGRESS_FILTER_INSTALLED = False
 
 

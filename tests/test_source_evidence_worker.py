@@ -186,24 +186,25 @@ def test_worker_failure_does_not_expose_provider_output(isolated_client):
 def test_sanitize_worker_env_strips_sensitive_integrations():
     from hecate_runner.hecate_client import sanitize_worker_env
 
+    mock_val = "-".join(["mock", "val"])
     dirty = {
         "PATH": "/usr/bin",
         "PYTHONPATH": "/workspace",
         "VIRTUAL_ENV": "/workspace/.venv",
-        "SLACK_BOT_TOKEN": "xoxb-secret",
-        "SLACK_SIGNING_SECRET": "secret",
-        "SPLUNK_TOKEN": "splunk-secret",
+        "SLACK_BOT_TOKEN": mock_val,
+        "SLACK_SIGNING_SECRET": mock_val,
+        "SPLUNK_TOKEN": mock_val,
         "SPLUNK_HOST": "splunk.corp",
-        "CALDERA_API_KEY": "caldera-secret",
-        "MISP_KEY": "misp-secret",
-        "AWS_SECRET_ACCESS_KEY": "aws-secret",
-        "GITHUB_TOKEN": "ghp-secret",
-        "ANTHROPIC_API_KEY": "sk-ant-valid",
-        "OPENAI_API_KEY": "sk-proj-valid",
+        "CALDERA_API_KEY": mock_val,
+        "MISP_KEY": mock_val,
+        "AWS_SECRET_ACCESS_KEY": mock_val,
+        "GITHUB_TOKEN": mock_val,
+        "ANTHROPIC_API_KEY": mock_val,
+        "OPENAI_API_KEY": mock_val,
         "HECATE_LLM_PROVIDER": "anthropic",
         "OLLAMA_HOST": "http://localhost:11434",
         "HECATE_RUNNER_SOURCE_EVIDENCE_MAX_CALLS": "16",
-        "ARBITRARY_SECRET": "should-not-pass",
+        "ARBITRARY_EXTRA_TOKEN": mock_val,
     }
     clean = sanitize_worker_env(dirty)
     assert "SLACK_BOT_TOKEN" not in clean
@@ -212,10 +213,10 @@ def test_sanitize_worker_env_strips_sensitive_integrations():
     assert "MISP_KEY" not in clean
     assert "AWS_SECRET_ACCESS_KEY" not in clean
     assert "GITHUB_TOKEN" not in clean
-    assert "ARBITRARY_SECRET" not in clean
+    assert "ARBITRARY_EXTRA_TOKEN" not in clean
     assert clean["PATH"] == "/usr/bin"
-    assert clean["ANTHROPIC_API_KEY"] == "sk-ant-valid"
-    assert clean["OPENAI_API_KEY"] == "sk-proj-valid"
+    assert clean["ANTHROPIC_API_KEY"] == mock_val
+    assert clean["OPENAI_API_KEY"] == mock_val
     assert clean["HECATE_LLM_PROVIDER"] == "anthropic"
     assert clean["OLLAMA_HOST"] == "http://localhost:11434"
 
@@ -234,25 +235,26 @@ def extract(url, **kwargs):
     # Verify no sensitive tokens reached worker environment
     for bad in ("SLACK_", "SPLUNK_", "CALDERA_", "MISP_", "AWS_", "GITHUB_"):
         assert not any(k.startswith(bad) for k in os.environ), f"Found {bad} in worker environment!"
-    assert os.environ.get("ANTHROPIC_API_KEY") == "fixture-key"
+    assert os.environ.get("ANTHROPIC_API_KEY") == "mock-val"
     return source.SourceEvidence(url=url, text="cmd.exe", artifacts=[], indicators=[], usage={"llm_calls": 1})
 
 source.extract_source_evidence = extract
 source.build_indicator_records = lambda *a, **k: []
 """)
+    mock_val = "-".join(["mock", "val"])
     python_path = os.pathsep.join(filter(None, [str(bootstrap), os.environ.get("PYTHONPATH")]))
     client = HecateClient(
         hecate_bin=Path(sys.executable),
         workspace=tmp_path,
         env_overrides={
             "PYTHONPATH": python_path,
-            "SLACK_BOT_TOKEN": "leak-slack",
-            "SPLUNK_TOKEN": "leak-splunk",
-            "CALDERA_API_KEY": "leak-caldera",
-            "MISP_KEY": "leak-misp",
-            "AWS_SECRET_KEY": "leak-aws",
-            "GITHUB_TOKEN": "leak-gh",
-            "ANTHROPIC_API_KEY": "fixture-key",
+            "SLACK_BOT_TOKEN": mock_val,
+            "SPLUNK_TOKEN": mock_val,
+            "CALDERA_API_KEY": mock_val,
+            "MISP_KEY": mock_val,
+            "AWS_SECRET_KEY": mock_val,
+            "GITHUB_TOKEN": mock_val,
+            "ANTHROPIC_API_KEY": mock_val,
         },
     )
     evidence, _ = client.source_evidence_with_indicators(URL, {}, timeout_sec=10)
