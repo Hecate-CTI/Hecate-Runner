@@ -18,12 +18,28 @@ def require(condition: bool, message: str) -> None:
 
 def _check_source_context() -> None:
     from hecate_agent.api import extract_indicators
+    from hecate_agent.core.source_evidence import report_body_text
     from hecate_agent.core.technique_evidence import technique_support
 
     from hecate_runner.hecate_client import TechniqueMetadata
     from hecate_runner.orchestrator_ttp import resolve_ttps
 
     revision = "a" * 40
+    body = report_body_text(
+        json.dumps(
+            {
+                "dataType": "CVE_RECORD",
+                "containers": {
+                    "cna": {
+                        "descriptions": [
+                            {"lang": "en", "value": "A web application has a race condition."}
+                        ],
+                    }
+                },
+            }
+        )
+    )
+    require("containers" not in body, "CVE schema metadata is exposed as target evidence")
     require(
         not extract_indicators(
             f"Vendor patch: https://github.com/example/project/commit/{revision}"

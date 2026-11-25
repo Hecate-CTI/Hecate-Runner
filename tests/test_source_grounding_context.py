@@ -1,5 +1,6 @@
 """Held advisory drafts must not gain techniques or scope from website context."""
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,6 +11,35 @@ from hecate_runner.config import Settings
 from hecate_runner.cti import CTIItem
 from hecate_runner.hecate_client import HypothesisResult, TechniqueMetadata
 from hecate_runner.orchestrator import Orchestrator
+
+
+def test_cve_schema_container_is_not_an_attacked_container_platform(settings, mock_hecate):
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
+    record = {
+        "dataType": "CVE_RECORD",
+        "containers": {
+            "cna": {
+                "descriptions": [
+                    {"lang": "en", "value": "Apache HTTP Server mod_http2 race condition."}
+                ],
+            },
+            "adp": [{"generator": "docker kubernetes"}],
+        },
+    }
+    orch._source_evidence = SourceEvidence(url="https://example.com/cve", text=json.dumps(record))
+    item = CTIItem(content="Apache HTTP Server race condition", source="manual")
+    assert orch._specimen_platforms(item) == []
+    assert '"containers"' not in orch._primary_evidence_text(item)
+
+
+def test_forticlient_platform_variants_are_explicit_product_scope(settings, mock_hecate):
+    orch = Orchestrator(settings=settings, hecate=mock_hecate, cti_provider=MagicMock())
+    _, platforms = orch._resolve_ttps(
+        [],
+        scope_text="Linux endpoints",
+        intel_text="Affected FortiClientMac and FortiClientWindowsPAM.",
+    )
+    assert set(platforms) == {"Windows", "macOS"}
 
 
 @pytest.mark.parametrize(

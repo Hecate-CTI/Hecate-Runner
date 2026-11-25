@@ -53,11 +53,11 @@ class OrchestratorGroundingMixin:
         Research can suggest what to investigate, but generated research is
         not evidence that this particular source reported a behavior.
         """
-        from hecate_agent.core.source_evidence import strip_page_furniture
+        from hecate_agent.core.source_evidence import report_body_text, strip_page_furniture
 
-        texts = [("cti", strip_page_furniture(item.content))]
+        texts = [("cti", strip_page_furniture(report_body_text(item.content)))]
         if self._source_evidence is not None and self._source_evidence.text:
-            source = strip_page_furniture(self._source_evidence.text)
+            source = strip_page_furniture(report_body_text(self._source_evidence.text))
             if item.source == "github_poc":
                 from hecate_agent.core.command_rules import without_tooling_sections
 
