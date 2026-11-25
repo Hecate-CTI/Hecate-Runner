@@ -34,6 +34,7 @@ class ApprovedProcedure:
     cleanup_command: str = ""
     cleanup_observed_argv: tuple[str, ...] = ()
     expected_files: tuple[str, ...] = ()
+    expected_network: tuple[dict[str, Any], ...] = ()
     fidelity_scope: str = "behavioral"  # "behavioral" | "smoke_check"
 
     @property
@@ -48,6 +49,7 @@ def _managed(
     cleanup_command: str = "",
     cleanup_observed: tuple[str, ...] = (),
     expected_files: tuple[str, ...] = (),
+    expected_network: tuple[dict[str, Any], ...] = (),
     fidelity_scope: str = "behavioral",
 ) -> ApprovedProcedure:
     key = f"{command}:{cleanup_command}" if cleanup_command else command
@@ -61,6 +63,7 @@ def _managed(
         cleanup_command,
         cleanup_observed,
         expected_files,
+        expected_network,
         fidelity_scope,
     )
 
@@ -75,6 +78,16 @@ APPROVED_PROCEDURES = {
     "T1069.001": ApprovedProcedure("T1069.001", "5c4dd985-89e3-4590-9b57-71fed66ff4e2", "groups"),
     "T1124": _managed("T1124", 'date -u +"%Y-%m-%dT%H:%M:%SZ"'),
     "T1059.004": _managed("T1059.004", "sh -c 'printf hecate-bas-shell-probe'"),
+    "T1059.006": _managed(
+        "T1059.006",
+        "python3 -c 'import sys; sys.stdout.write(\"hecate-bas-python-probe\\n\")'",
+        ("python3", "-c", 'import sys; sys.stdout.write("hecate-bas-python-probe\\n")'),
+    ),
+    "T1059.007": _managed(
+        "T1059.007",
+        "node -e 'process.stdout.write(\"hecate-bas-node-probe\\n\")'",
+        ("node", "-e", 'process.stdout.write("hecate-bas-node-probe\\n")'),
+    ),
     "T1140": _managed("T1140", "printf 'aGVjYXRlLWJhcy1wcm9iZQ==' | base64 -d", ("base64", "-d")),
     "T1070.004": _managed(
         "T1070.004",
@@ -116,6 +129,9 @@ APPROVED_PROCEDURES = {
         cleanup_command="rm -f /tmp/hecate-t1105.tmp",
         cleanup_observed=("rm", "-f", "/tmp/hecate-t1105.tmp"),
         expected_files=("/tmp/hecate-t1105.tmp",),
+        expected_network=(
+            {"DestinationIp": "127.0.0.1", "DestinationPort": 8888, "Protocol": "tcp"},
+        ),
         fidelity_scope="behavioral",
     ),
     "T1049": _managed("T1049", "ss -tan"),
@@ -166,11 +182,18 @@ APPROVED_PROCEDURES = {
         "T1046",
         "nc -z -v -w 1 127.0.0.1 22",
         ("nc", "-z", "-v", "-w", "1", "127.0.0.1", "22"),
+        expected_network=(
+            {"DestinationIp": "127.0.0.1", "DestinationPort": 22, "Protocol": "tcp"},
+        ),
     ),
     "T1526": _managed(
         "T1526",
         "curl -s -m 1 http://127.0.0.1:80/latest/meta-data/",
         ("curl", "-s", "-m", "1", "http://127.0.0.1:80/latest/meta-data/"),
+        expected_network=(
+            {"DestinationIp": "127.0.0.1", "DestinationPort": 80, "Protocol": "tcp"},
+            {"DestinationIp": "169.254.169.254", "DestinationPort": 80, "Protocol": "tcp"},
+        ),
     ),
     "T1613": _managed(
         "T1613",
@@ -181,12 +204,23 @@ APPROVED_PROCEDURES = {
         "T1071.001",
         "curl -sI https://localhost/",
         ("curl", "-sI", "https://localhost/"),
+        expected_network=(
+            {
+                "DestinationIp": "127.0.0.1",
+                "DestinationHostname": "localhost",
+                "DestinationPort": 443,
+                "Protocol": "tcp",
+            },
+        ),
         fidelity_scope="smoke_check",
     ),
     "T1190": _managed(
         "T1190",
         "curl -s http://127.0.0.1:80/",
         ("curl", "-s", "http://127.0.0.1:80/"),
+        expected_network=(
+            {"DestinationIp": "127.0.0.1", "DestinationPort": 80, "Protocol": "tcp"},
+        ),
         fidelity_scope="smoke_check",
     ),
     "T1041": _managed(
@@ -212,6 +246,8 @@ ARTIFACT_FREE_TECHNIQUES = frozenset(
         "T1069.001",
         "T1124",
         "T1059.004",
+        "T1059.006",
+        "T1059.007",
         "T1140",
         "T1049",
         "T1007",
@@ -302,6 +338,7 @@ def catalog_digest() -> str:
                 "managed": proc.managed,
                 "cleanup_command": proc.cleanup_command,
                 "expected_files": list(proc.expected_files),
+                "expected_network": [dict(n) for n in proc.expected_network],
                 "artifact_free": tech_id in ARTIFACT_FREE_TECHNIQUES,
                 "fidelity_scope": proc.fidelity_scope,
             },
@@ -326,6 +363,8 @@ def ability_definition(procedure: ApprovedProcedure) -> dict[str, Any]:
         "tactic": {
             "T1190": "initial-access",
             "T1059.004": "execution",
+            "T1059.006": "execution",
+            "T1059.007": "execution",
             "T1053.003": "persistence",
             "T1543.002": "persistence",
             "T1222.002": "defense-evasion",
@@ -388,6 +427,23 @@ def validate_approved_ability(ability: dict[str, Any], procedure: ApprovedProced
         raise SafetyViolationError("Approved CALDERA procedure content changed; execution refused.")
 
 
+COMMON_PARENTS: tuple[str, ...] = (
+    "/usr/sbin/php-fpm",
+    "/usr/sbin/php-cgi",
+    "/usr/sbin/apache2",
+    "/usr/sbin/httpd",
+    "/usr/sbin/nginx",
+    "/usr/bin/python3",
+    "/usr/bin/node",
+    "/usr/bin/gunicorn",
+    "/usr/bin/uwsgi",
+    "/bin/bash",
+    "/bin/sh",
+    "/usr/sbin/cron",
+    "/lib/systemd/systemd",
+)
+
+
 def select_approved_rule(
     rules: list[dict[str, Any]], techniques: list[str], allowed: list[str]
 ) -> tuple[ApprovedProcedure, str] | None:
@@ -411,19 +467,6 @@ def _select_approved_rule(
     fidelity: str,
 ) -> tuple[ApprovedProcedure, str] | None:
     import yaml
-
-    common_parents = (
-        "/usr/sbin/php-fpm",
-        "/usr/sbin/php-cgi",
-        "/usr/sbin/apache2",
-        "/usr/sbin/httpd",
-        "/usr/sbin/nginx",
-        "/usr/bin/python3",
-        "/bin/bash",
-        "/bin/sh",
-        "/usr/sbin/cron",
-        "/lib/systemd/systemd",
-    )
 
     for rule in rules:
         text = rule.get("rule_yaml", "")
@@ -461,7 +504,7 @@ def _select_approved_rule(
                 procedure = APPROVED_PROCEDURES[technique]
                 if procedure.fidelity_scope != fidelity:
                     continue
-                if _procedure_matches_rule(procedure, text, common_parents):
+                if _procedure_matches_rule(procedure, text, COMMON_PARENTS):
                     return procedure, text
     return None
 
@@ -472,17 +515,43 @@ def _procedure_matches_rule(
     """True when synthetic observations of the pinned command can hit the rule."""
     from hecate_agent.core.sigma_evaluator import SigmaEvaluator
 
-    candidates = [
-        {
-            "data_source": "process_creation",
-            "category": "process_creation",
-            "product": "linux",
-            "Image": f"{directory}/{procedure.argv[0]}",
-            "CommandLine": shlex.join(procedure.argv),
-            "User": "root",
-        }
-        for directory in ("/bin", "/usr/bin", "/sbin", "/usr/sbin")
-    ]
+    candidates: list[dict[str, Any]] = []
+
+    # 1. Process creation candidates
+    bin_directories = ("/bin", "/usr/bin", "/sbin", "/usr/sbin")
+    for directory in bin_directories:
+        candidates.append(
+            {
+                "data_source": "process_creation",
+                "category": "process_creation",
+                "product": "linux",
+                "Image": f"{directory}/{procedure.argv[0]}",
+                "CommandLine": shlex.join(procedure.argv),
+                "User": "root",
+            }
+        )
+    if procedure.command.startswith(("sh -c", "bash -c")):
+        candidates.append(
+            {
+                "data_source": "process_creation",
+                "category": "process_creation",
+                "product": "linux",
+                "Image": "/bin/sh",
+                "CommandLine": procedure.command,
+                "User": "root",
+            }
+        )
+        candidates.append(
+            {
+                "data_source": "process_creation",
+                "category": "process_creation",
+                "product": "linux",
+                "Image": "/bin/bash",
+                "CommandLine": procedure.command,
+                "User": "root",
+            }
+        )
+
     for directory in ("/bin", "/usr/bin"):
         for parent in common_parents:
             candidates.append(
@@ -495,11 +564,24 @@ def _procedure_matches_rule(
                     "ParentImage": parent,
                     "User": (
                         "www-data"
-                        if any(w in parent for w in ("php", "apache", "httpd", "nginx"))
+                        if any(
+                            w in parent
+                            for w in (
+                                "php",
+                                "apache",
+                                "httpd",
+                                "nginx",
+                                "gunicorn",
+                                "uwsgi",
+                                "lighttpd",
+                            )
+                        )
                         else "root"
                     ),
                 }
             )
+
+    # 2. File event candidates
     for fpath in procedure.expected_files:
         candidates.append(
             {
@@ -511,6 +593,119 @@ def _procedure_matches_rule(
                 "CommandLine": shlex.join(procedure.argv),
             }
         )
+
+    # 3. Network connection candidates
+    network_targets: list[dict[str, Any]] = list(procedure.expected_network)
+    if not network_targets:
+        import re
+        import urllib.parse
+
+        url_matches = re.findall(r"https?://[^\s'\"`]+", procedure.command)
+        for url in url_matches:
+            try:
+                parsed = urllib.parse.urlsplit(url)
+                port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                host = parsed.hostname or "127.0.0.1"
+                network_targets.append(
+                    {
+                        "DestinationIp": "127.0.0.1"
+                        if host in ("127.0.0.1", "localhost")
+                        else host,
+                        "DestinationPort": port,
+                        "DestinationHostname": host if host not in ("127.0.0.1", "::1") else None,
+                        "Protocol": "tcp",
+                    }
+                )
+            except Exception:
+                pass
+        nc_match = re.search(r"\bnc\s+(?:-[a-zA-Z0-9]+\s+)*([^\s]+)\s+(\d+)", procedure.command)
+        if nc_match:
+            host, port = nc_match.group(1), int(nc_match.group(2))
+            network_targets.append(
+                {
+                    "DestinationIp": "127.0.0.1" if host in ("127.0.0.1", "localhost") else host,
+                    "DestinationPort": port,
+                    "Protocol": "tcp",
+                }
+            )
+
+    for net in network_targets:
+        dst_ip = net.get("DestinationIp", "127.0.0.1")
+        dst_port = int(net.get("DestinationPort", 80))
+        proto = net.get("Protocol", "tcp")
+        dst_host = net.get("DestinationHostname")
+
+        for directory in ("/bin", "/usr/bin"):
+            base_net = {
+                "data_source": "network_connection",
+                "category": "network_connection",
+                "product": "linux",
+                "Image": f"{directory}/{procedure.argv[0]}",
+                "CommandLine": shlex.join(procedure.argv),
+                "DestinationIp": dst_ip,
+                "DestinationPort": dst_port,
+                "Protocol": proto,
+                "Initiated": True,
+                "User": "root",
+            }
+            if dst_host:
+                base_net["DestinationHostname"] = dst_host
+            candidates.append(base_net)
+
+            if dst_ip in ("127.0.0.1", "localhost"):
+                ext_net = dict(base_net)
+                ext_net["DestinationIp"] = "198.51.100.1"
+                candidates.append(ext_net)
+
+            for parent in common_parents:
+                parent_net = dict(base_net)
+                parent_net["ParentImage"] = parent
+                parent_net["User"] = (
+                    "www-data"
+                    if any(
+                        w in parent
+                        for w in (
+                            "php",
+                            "apache",
+                            "httpd",
+                            "nginx",
+                            "gunicorn",
+                            "uwsgi",
+                            "lighttpd",
+                        )
+                    )
+                    else "root"
+                )
+                candidates.append(parent_net)
+                if dst_ip in ("127.0.0.1", "localhost"):
+                    ext_parent_net = dict(parent_net)
+                    ext_parent_net["DestinationIp"] = "198.51.100.1"
+                    candidates.append(ext_parent_net)
+
+        if procedure.technique_id == "T1190" or any(
+            w in procedure.command for w in ("curl", "wget")
+        ):
+            for parent in common_parents:
+                if any(w in parent for w in ("apache", "httpd", "nginx", "php")):
+                    web_net = {
+                        "data_source": "network_connection",
+                        "category": "network_connection",
+                        "product": "linux",
+                        "Image": parent,
+                        "DestinationIp": dst_ip,
+                        "DestinationPort": dst_port,
+                        "Protocol": proto,
+                        "Initiated": True,
+                        "User": "www-data",
+                    }
+                    if dst_host:
+                        web_net["DestinationHostname"] = dst_host
+                    candidates.append(web_net)
+                    if dst_ip in ("127.0.0.1", "localhost"):
+                        ext_web_net = dict(web_net)
+                        ext_web_net["DestinationIp"] = "198.51.100.1"
+                        candidates.append(ext_web_net)
+
     try:
         return bool(SigmaEvaluator.evaluate_rule(rule_yaml, candidates, []).true_positives > 0)
     except Exception:
@@ -572,22 +767,7 @@ def explain_approved_selection(
             if technique not in rule_techniques:
                 continue
             procedure = APPROVED_PROCEDURES[technique]
-            if not _procedure_matches_rule(
-                procedure,
-                text,
-                (
-                    "/usr/sbin/php-fpm",
-                    "/usr/sbin/php-cgi",
-                    "/usr/sbin/apache2",
-                    "/usr/sbin/httpd",
-                    "/usr/sbin/nginx",
-                    "/usr/bin/python3",
-                    "/bin/bash",
-                    "/bin/sh",
-                    "/usr/sbin/cron",
-                    "/lib/systemd/systemd",
-                ),
-            ):
+            if not _procedure_matches_rule(procedure, text, COMMON_PARENTS):
                 predicate_misses += 1
 
     if linux_rules == 0:

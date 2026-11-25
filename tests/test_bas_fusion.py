@@ -86,10 +86,12 @@ def test_parse_net_trace_connect():
     assert events[0]["DestinationPort"] == 8888
     assert events[0]["DestinationIp"] == "172.21.0.2"
     assert events[0]["Protocol"] == "tcp"
+    assert events[0]["Initiated"] is True
     assert events[0]["category"] == "network_connection"
     assert events[0]["ProcessId"] == 301
 
     assert events[1]["DestinationPort"] == 8888
+    assert events[1]["Initiated"] is True
     assert events[1]["ProcessId"] == 302
 
 

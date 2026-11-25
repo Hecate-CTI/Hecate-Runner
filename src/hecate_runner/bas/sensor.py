@@ -346,6 +346,7 @@ def parse_net_trace(
                 "DestinationIp": ip,
                 "DestinationPort": port,
                 "Protocol": "tcp",
+                "Initiated": True,
                 "ProcessId": pid,
                 "UtcTime": datetime.fromtimestamp(timestamp, UTC).isoformat(),
             }
