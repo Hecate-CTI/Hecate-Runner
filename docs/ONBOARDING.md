@@ -96,6 +96,97 @@ intake, select `HECATE_RUNNER_CTI_PROVIDER=file`, place a `.txt` item in
 `<workspace>/cti_queue/`, and run `hecate-runner run`. Use `sources` commands for
 supported feeds; `daemon` processes configured intake continuously under quotas.
 
+## Setting up background services (Autonomous Node)
+
+For production deployments, 24/7 continuous threat intelligence intake, scheduled hunt sweeps, continuous Purple Team replay verification, SIEM drift reconciliation, and Slack operations, Hecate runs as hardened background systemd services.
+
+### Core service architecture
+
+| Service Unit | Status | Purpose | Dedicated Account | Config File |
+| :--- | :---: | :--- | :--- | :--- |
+| **`hecate-runner-daemon`** | **Required** | Perpetual CTI intake, hypothesis drafting, active hunt sweeps, and continuous Purple Team verification | `hecate-reader` | `/etc/hecate/reader.env` |
+| **`hecate-runner-maintenance`** | **Required** | SIEM query drift auditing/auto-reconciliation, GitHub PR & MISP outbox publishing, queue maintenance | `hecate-writer` | `/etc/hecate/writer.env` |
+| **`hecate-slack-bot`** | **Recommended** | Interactive Socket Mode bot, slash commands (`/hecate status`, `/hecate hunt`), and multi-channel alerting | `hecate-slack` | `/etc/hecate/slack.env` |
+| **`hecate-bas-broker`** | **Optional** | Unix domain socket broker (`/run/hecate-bas/broker.sock`) for sandboxed Docker adversary emulation | `root` / `docker` | *Supervised socket ACL* |
+
+### Step 1: Initial automated setup
+
+From the `Hecate-Runner` repository root, run the guided setup script:
+
+```bash
+# 1. Validate inputs and paths without installing:
+./scripts/setup-services.sh --check
+
+# 2. Run the guided installer with administrative privileges:
+sudo ./scripts/setup-services.sh \
+  --core ../Hecate-Core \
+  --workspace ../Hecate-Public \
+  --env-dir /etc/hecate
+```
+
+The installer:
+1. Provisions dedicated non-login system accounts (`hecate-reader`, `hecate-writer`, `hecate-slack`) and group `hecate-data`.
+2. Compiles and locks the isolated runtime under `/opt/hecate/releases/<timestamp>-runtime` and creates the active symlink `/opt/hecate/runtime`.
+3. Seeds role-separated credential files in `/etc/hecate/` with permissions `0640`.
+4. Hardens and enables the systemd unit files with `NoNewPrivileges=yes`, `ProtectSystem=strict`, and private namespaces.
+
+### Step 2: Configure role environment files
+
+Populate the required credentials in `/etc/hecate/` (permissions must be `0640` owned by `root:hecate-<role>`):
+
+* **`/etc/hecate/reader.env` (`hecate-reader`):**
+  Read-only ingestion keys. Contains `SPLUNK_READ_TOKEN`, `SPLUNK_HOST`, CTI feed API keys (e.g. `OTX_API_KEY`), and LLM configuration (`HECATE_LLM_PROVIDER`, `HECATE_LLM_MODEL`).
+  > [!CAUTION]
+  > Never put publishing keys (`SPLUNK_WRITE_TOKEN`, GitHub App private keys, or Slack app tokens) into `reader.env`.
+
+* **`/etc/hecate/writer.env` (`hecate-writer`):**
+  Publishing and maintenance keys. Contains `SPLUNK_WRITE_TOKEN`, `SPLUNK_READ_TOKEN` (for SIEM audits), `HECATE_RUNNER_SIEM_DRIFT_AUTO_RECONCILE=true`, GitHub App credentials (`HECATE_RUNNER_GITHUB_APP_PRIVATE_KEY_PATH`), and MISP publishing keys.
+
+* **`/etc/hecate/slack.env` (`hecate-slack`):**
+  Slack integration tokens (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`) and pinned channel IDs:
+  - `SLACK_CHANNEL_HUNTS_EXEC`: Executive findings and PR notifications (e.g., `C0CC5R9S4EP`).
+  - `SLACK_CHANNEL_THREAT_HUNTING`: Operational hunting and sweep findings feed (e.g., `C0CCA3NLN0N`).
+  - `SLACK_CHANNEL_OPS_METRICS`: Daily consolidated operations pulse (e.g., `C0CC6PG0GAH`).
+
+Starter templates are available in [`deploy/service-env/`](../deploy/service-env/).
+
+### Step 3: Verify service health
+
+Verify that all daemons have started cleanly:
+
+```bash
+# Check status across all units:
+systemctl status hecate-runner-daemon.service hecate-runner-maintenance.service hecate-slack-bot.service hecate-bas-broker.service
+
+# Follow live orchestrator logs:
+journalctl -u hecate-runner-daemon.service -f
+
+# Follow maintenance and SIEM drift reconciliation logs:
+journalctl -u hecate-runner-maintenance.service -f
+
+# Verify environment and dependency health:
+hecate-runner doctor
+```
+
+### Step 4: Updating services after code changes
+
+Production background services execute from the standalone isolated runtime at `/opt/hecate/runtime`. When code changes are committed or pulled into `Hecate-Core` or `Hecate-Runner`, do **not** run `pip install` directly. Instead, build and apply an atomic runtime update:
+
+```bash
+# 1. Build a new runtime stage as your normal unprivileged user:
+scripts/prepare-service-runtime.sh ../Hecate-Core /tmp/hecate-runtime-stage
+
+# 2. Apply the update atomically as root using the runtime's virtual environment:
+sudo /opt/hecate/runtime/venv/bin/python scripts/update-service-runtime.py --runtime-stage /tmp/hecate-runtime-stage
+
+# 3. Clean up the temporary staging directory:
+rm -rf /tmp/hecate-runtime-stage
+```
+
+The update script gracefully drains running workers, swaps `/opt/hecate/runtime` atomically, runs runtime contract verification, and restarts the services. Automatic rollback snapshots are preserved in `/var/backups/hecate-service-isolation/`.
+
+For detailed architecture and systemd hardening details, see [Background Services](SERVICES.md) and [Service Isolation](SERVICE_ISOLATION.md).
+
 ## Validation, publishing and services
 
 | Guide | Use it for |

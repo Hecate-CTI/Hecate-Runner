@@ -93,10 +93,12 @@ class SlackBotSimulator:
                 msg = (
                     f"🧪 *Purple Team Replay for `{hunt_id}` Completed*\n"
                     f"• *Reviewer:* <@{user}>\n"
-                    f"• *Rules Tested:* {res.get('total_rules')}\n"
-                    f"• *Rules Validated:* {res.get('passed_rules')}\n"
-                    f"• *Detection Fidelity:* {res.get('fidelity')}\n"
-                    f"• *Sandbox Telemetry:* {res.get('sample_events_count')} events evaluated"
+                    f"• *Rules Found:* {res.get('total_rules')}\n"
+                    f"• *Independent Checks Passed:* {res.get('passed_rules')}\n"
+                    f"• *Failed / Errors:* {res.get('failed_rules', 0)} / {res.get('error_rules', 0)}\n"
+                    f"• *Not Assessed:* {res.get('not_assessed_rules', 0)}\n"
+                    f"• *Assessed Case Pass Rate:* {res.get('fidelity')}\n"
+                    f"• *Synthetic Rule-Event Checks:* {res.get('sample_events_count')} events evaluated"
                 )
             else:
                 msg = f"❌ *Purple Team Replay failed for `{hunt_id}`:* {res.get('error')}"
@@ -267,10 +269,12 @@ class SlackBotSimulator:
                 msg = (
                     f"🧪 *Purple Team Replay for `{hunt_id}` Completed*\n"
                     f"• *Requested by:* <@{user}>\n"
-                    f"• *Rules Tested:* {res.get('total_rules')}\n"
-                    f"• *Rules Validated:* {res.get('passed_rules')}\n"
-                    f"• *Detection Fidelity:* {res.get('fidelity')}\n"
-                    f"• *Sandbox Telemetry:* {res.get('sample_events_count')} events evaluated"
+                    f"• *Rules Found:* {res.get('total_rules')}\n"
+                    f"• *Independent Checks Passed:* {res.get('passed_rules')}\n"
+                    f"• *Failed / Errors:* {res.get('failed_rules', 0)} / {res.get('error_rules', 0)}\n"
+                    f"• *Not Assessed:* {res.get('not_assessed_rules', 0)}\n"
+                    f"• *Assessed Case Pass Rate:* {res.get('fidelity')}\n"
+                    f"• *Synthetic Rule-Event Checks:* {res.get('sample_events_count')} events evaluated"
                 )
             else:
                 msg = f"❌ *Purple Team Replay failed for `{hunt_id}`:* {res.get('error')}"

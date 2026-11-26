@@ -124,6 +124,42 @@ class FindingTriageReport:
         return asdict(self)
 
 
+def _select_stratified_sample(
+    events: list[NormalizedEvent], max_sample: int = 5
+) -> list[NormalizedEvent]:
+    """Select a bounded sample representing distinct attack stages and queries.
+
+    Ensures multi-stage attack progressions have visibility across recon,
+    execution, persistence, C2, and discovery rather than sampling from only
+    one dominant telemetry cluster. When events share a single stage or lack
+    stage metadata, a uniform index sample spanning the full range (including
+    the last event) is preserved.
+    """
+    if len(events) <= max_sample:
+        return events
+
+    # Group events by attack stage, stage_label, or query_file
+    groups: dict[str, list[NormalizedEvent]] = {}
+    for ev in events:
+        key = ev.stage_label or ev.stage or ev.query_file or "default"
+        groups.setdefault(key, []).append(ev)
+
+    # If there is only one group (or no stage metadata), spread across the full range
+    if len(groups) <= 1:
+        return [events[i * (len(events) - 1) // (max_sample - 1)] for i in range(max_sample)]
+
+    sample: list[NormalizedEvent] = []
+    group_lists = list(groups.values())
+    round_idx = 0
+    while len(sample) < max_sample and any(round_idx < len(g) for g in group_lists):
+        for g in group_lists:
+            if round_idx < len(g) and len(sample) < max_sample:
+                sample.append(g[round_idx])
+        round_idx += 1
+
+    return sample
+
+
 class FindingTriageAgent:
     """Evaluates telemetry matches against hunt hypotheses using heuristics & LLM."""
 
@@ -394,26 +430,37 @@ class FindingTriageAgent:
             from hecate_agent.core.llm_router import create_router
 
             provider = create_router()
-            # Spread a bounded sample across returned events, while explicitly
-            # retaining the fact that it is not a representative population test.
-            sample = (
-                events
-                if len(events) <= 5
-                else [events[i * (len(events) - 1) // 4] for i in range(5)]
-            )
-            sample_data = [
-                {
+            # Select a stratified sample across distinct attack stages and queries
+            sample = _select_stratified_sample(events)
+            sample_data = []
+            for ev in sample:
+                entry: dict[str, Any] = {
                     "event_id": ev.event_id,
                     "timestamp": ev.timestamp,
-                    "host": ev.host,
-                    "user": ev.user,
-                    "process": ev.process_name,
-                    "parent": ev.parent_process,
-                    "command_line": ev.command_line,
-                    "ip": ev.ip,
                 }
-                for ev in sample
-            ]
+                if ev.stage_label or ev.stage:
+                    entry["stage"] = ev.stage_label or ev.stage
+                if ev.query_file:
+                    entry["query"] = ev.query_file
+                if ev.host:
+                    entry["host"] = ev.host
+                if ev.user:
+                    entry["user"] = ev.user
+                if ev.process_name:
+                    entry["process"] = ev.process_name
+                if ev.parent_process:
+                    entry["parent"] = ev.parent_process
+                if ev.command_line:
+                    entry["command_line"] = ev.command_line
+                if ev.file_path:
+                    entry["file_path"] = ev.file_path
+                if ev.domain:
+                    entry["domain"] = ev.domain
+                if ev.ip:
+                    entry["ip"] = ev.ip
+                if ev.hash_val:
+                    entry["hash"] = ev.hash_val
+                sample_data.append(entry)
             workspace = self.settings.hecate_workspace
             system = (
                 f"Evidence rules:\n{EVIDENCE_RULES}\n\n"

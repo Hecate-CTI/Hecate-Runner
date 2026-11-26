@@ -368,7 +368,13 @@ def daily_digest(
         ),
     ] = True,
 ) -> None:
-    """Generate and optionally post daily digests for Detection Eng, Threat Intel, and Threat Hunting."""
+    """Generate and optionally post digests.
+
+    ``domain=all`` posts one combined detection+hunting pulse (ops channel).
+    Explicit domains still post their dedicated single-channel digest.
+    """
+    from hecate_runner.notifications import notify_combined_daily_digest
+
     settings = _get_settings()
     domain = domain.lower().strip()
 
@@ -378,8 +384,34 @@ def daily_digest(
         )
         raise typer.Exit(code=1)
 
+    # Combined pulse — one Slack post instead of three channels.
+    if domain == "all":
+        det_data = collect_detection_engineering_metrics(settings, hours=hours)
+        hunt_data = collect_threat_hunting_metrics(settings, hours=hours)
+        table = Table(title=f"Combined Daily Digest ({hours}h)", box=box.ROUNDED)
+        table.add_column("Area", style="dim")
+        table.add_column("Highlight", style="bold cyan")
+        table.add_row("Detection rules authored", str(det_data.get("rules_authored", 0)))
+        table.add_row("Hunts completed", str(hunt_data.get("hunts_completed", 0)))
+        table.add_row(
+            "Top techniques",
+            ", ".join(hunt_data.get("top_techniques") or []) or "None",
+        )
+        console.print(table)
+        if post and (settings.slack_bot_token or settings.slack_webhook_url):
+            target = channel or settings.slack_channel_ops_metrics
+            console.print(f"[dim]Posting combined daily digest to {target}...[/dim]")
+            success, msg = notify_combined_daily_digest(
+                settings, detection=det_data, hunting=hunt_data, channel=target
+            )
+            if success:
+                console.print(f"[green]✓ Combined digest delivered. ({msg})[/green]")
+            else:
+                console.print(f"[yellow]⚠️ Combined digest post note: {msg}[/yellow]")
+        return
+
     # 1. Detection Engineering
-    if domain in ("all", "detection"):
+    if domain == "detection":
         det_data = collect_detection_engineering_metrics(settings, hours=hours)
         table = Table(title=f"Detection Engineering Digest ({hours}h Window)", box=box.ROUNDED)
         table.add_column("Metric", style="dim")
@@ -399,7 +431,7 @@ def daily_digest(
                 console.print(f"[yellow]⚠️ Detection Eng digest post note: {msg}[/yellow]")
 
     # 2. Threat Intel
-    if domain in ("all", "intel"):
+    if domain == "intel":
         intel_data = collect_threat_intel_metrics(settings, hours=hours)
         table = Table(title=f"Threat Intelligence Digest ({hours}h Window)", box=box.ROUNDED)
         table.add_column("Metric", style="dim")
@@ -419,7 +451,7 @@ def daily_digest(
                 console.print(f"[yellow]⚠️ Threat Intel digest post note: {msg}[/yellow]")
 
     # 3. Threat Hunting
-    if domain in ("all", "hunting"):
+    if domain == "hunting":
         hunt_data = collect_threat_hunting_metrics(settings, hours=hours)
         table = Table(title=f"Threat Hunting Digest ({hours}h Window)", box=box.ROUNDED)
         table.add_column("Metric", style="dim")

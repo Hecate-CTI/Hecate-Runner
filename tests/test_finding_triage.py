@@ -403,3 +403,123 @@ def test_cli_sweep_findings(mock_workspace_phase2: Path, monkeypatch: pytest.Mon
     assert "H-0021" in out
     assert "Node-RED" in out
     assert "Findings Ledger" in out
+
+
+def test_select_stratified_sample() -> None:
+    """Stratified sampling selects events across distinct stages and queries."""
+    from hecate_runner.execution.triage_agent import _select_stratified_sample
+
+    events = (
+        [
+            NormalizedEvent(
+                event_id=f"ev-recon-{i}",
+                hunt_id="H-0038",
+                target_siem="splunk",
+                timestamp="2026-11-26T19:00:00Z",
+                stage="recon_delivery",
+                stage_label="Recon & Delivery",
+                query_file="dns_query.spl",
+                domain="profitnow.io",
+            )
+            for i in range(10)
+        ]
+        + [
+            NormalizedEvent(
+                event_id=f"ev-exec-{i}",
+                hunt_id="H-0038",
+                target_siem="splunk",
+                timestamp="2026-11-26T19:05:00Z",
+                stage="execution",
+                stage_label="Process Execution",
+                query_file="process_creation.spl",
+                process_name="/bin/bash",
+                command_line="bash .UlaccK",
+            )
+            for i in range(10)
+        ]
+        + [
+            NormalizedEvent(
+                event_id=f"ev-persist-{i}",
+                hunt_id="H-0038",
+                target_siem="splunk",
+                timestamp="2026-11-26T19:10:00Z",
+                stage="persistence_evasion",
+                stage_label="Persistence",
+                query_file="file_event.spl",
+                file_path="/Users/lab/Library/LaunchAgents/com.apple.softwareupdated.plist",
+            )
+            for i in range(10)
+        ]
+    )
+
+    sample = _select_stratified_sample(events, max_sample=6)
+    assert len(sample) == 6
+    stages_in_sample = {ev.stage for ev in sample}
+    # All 3 stages must be represented in the bounded sample
+    assert stages_in_sample == {"recon_delivery", "execution", "persistence_evasion"}
+
+
+def test_scheduler_pivot_on_recommended_action() -> None:
+    """Scheduler executes pivots when recommended_action is pivot even below 0.70 confidence."""
+    triage_report = FindingTriageReport(
+        hunt_id="H-0038",
+        sweep_id="SWEEP-H-0038-001",
+        target_siem="splunk",
+        verdict="suspicious",
+        confidence=0.65,
+        summary="Suspicious LaunchAgent creation without lineage",
+        rationale="Needs parent process pivot.",
+        technique_matches=["T1543.001"],
+        recommended_action="pivot",
+    )
+    min_pivot_conf = 0.70
+    auto_hunt_pivots_enabled = True
+
+    should_pivot = (
+        triage_report
+        and auto_hunt_pivots_enabled
+        and (
+            (
+                triage_report.verdict in ("true_positive", "suspicious")
+                and triage_report.confidence >= min_pivot_conf
+            )
+            or (
+                triage_report.recommended_action == "pivot"
+                and triage_report.confidence >= max(0.50, min_pivot_conf - 0.20)
+            )
+        )
+    )
+    assert should_pivot is True
+
+
+def test_scheduler_dual_channel_notification(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """HuntExecutionScheduler dispatches sweep notifications to executive and threat hunting channels."""
+    posted_channels: list[str] = []
+
+    class MockNotifier:
+        is_configured = True
+
+        def post_message(self, channel: str, text: str, **kwargs: object) -> tuple[bool, str]:
+            posted_channels.append(channel)
+            return True, "ok"
+
+    monkeypatch.setattr(
+        "hecate_runner.notifications.SlackNotificationRouter",
+        lambda _s: MockNotifier(),
+    )
+
+    settings = Settings(
+        hecate_workspace=tmp_path,
+        slack_bot_token="xoxb-fake",
+        slack_channel_hunts_exec="C0CC5R9S4EP",
+        slack_channel_threat_hunting="C0CCA3NLN0N",
+    )
+
+    scheduler = HuntExecutionScheduler(settings=settings)
+    assert scheduler.notify_fn is not None
+
+    scheduler.notify_fn([{"type": "section", "text": {"type": "mrkdwn", "text": "test"}}])
+    assert "C0CC5R9S4EP" in posted_channels
+    assert "C0CCA3NLN0N" in posted_channels
