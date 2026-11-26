@@ -19,6 +19,7 @@ import httpx
 
 from hecate_runner.config import Settings
 from hecate_runner.slack_blocks import (
+    build_combined_daily_digest_card,
     build_detection_engineering_digest_card,
     build_draft_card,
     build_hunt_completed_card,
@@ -298,18 +299,31 @@ def notify_purple_team(
     summary: str,
     replay_status: str | None = None,
 ) -> None:
-    """Report synthetic rule replay; a match is not live detection validation."""
+    """Report synthetic rule replay; a match is not live detection validation.
+
+    Opt-in via ``slack_notify_purple_team``. Successful replays never post —
+    they are already summarized on the draft card.
+    """
+    if not settings.slack_notify_purple_team:
+        log.debug(
+            "Skipping purple-team Slack notification for %s (slack_notify_purple_team=False)",
+            hunt_id,
+        )
+        return
+    if success:
+        log.debug(
+            "Skipping successful purple-team Slack notification for %s (misses only)",
+            hunt_id,
+        )
+        return
+
     router = SlackNotificationRouter(settings)
     if not router.is_configured:
         return
 
-    status_icon = ":white_check_mark:" if success else ":warning:"
-    status_label = replay_status or (
-        "Synthetic Rule Match" if success else "No Synthetic Rule Match"
-    )
-
+    status_label = replay_status or "No Synthetic Rule Match"
     text = (
-        f"{status_icon} *Purple Team Synthetic Replay: {hunt_id}*\n"
+        f":warning: *Purple Team Synthetic Replay Miss: {hunt_id}*\n"
         f"*Technique:* `{technique}`\n"
         f"*Replay Status:* `{status_label}`\n"
         f"*Synthetic Samples:* {telemetry_count} events\n"
@@ -451,6 +465,24 @@ def notify_threat_hunting_digest(
     return router.post_message(target_channel, text, attachments=attachments)
 
 
+def notify_combined_daily_digest(
+    settings: Settings,
+    *,
+    detection: dict[str, Any],
+    hunting: dict[str, Any],
+    channel: str | None = None,
+) -> tuple[bool, str]:
+    """Post one combined daily pulse (detection + hunting) instead of three channels."""
+    router = SlackNotificationRouter(settings)
+    if not router.is_configured:
+        return False, "Slack unconfigured."
+
+    target_channel = channel or settings.slack_channel_ops_metrics
+    text = f":bar_chart: *Hecate Daily Digest*\nDetection + hunting pulse → `{target_channel}`."
+    attachments = build_combined_daily_digest_card(detection=detection, hunting=hunting)
+    return router.post_message(target_channel, text, attachments=attachments)
+
+
 def notify_siem_drift(
     settings: Settings,
     hunt_id: str,
@@ -465,7 +497,8 @@ def notify_siem_drift(
     target_channel = (
         channel or settings.slack_channel_detection_engineering or settings.slack_channel_hunts_exec
     )
-    text = f"⚠️ *SIEM Detection Drift Detected for `{hunt_id}`*"
+    active = [q for q in drifted_queries if q.get("status") != "decommissioned"]
+    text = f"⚠️ *SIEM drift:* `{hunt_id}` — {len(active)} query(ies)"
     attachments = build_siem_drift_alert_card(
         hunt_id=hunt_id,
         drifted_queries=drifted_queries,

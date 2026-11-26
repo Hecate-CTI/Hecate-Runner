@@ -254,20 +254,33 @@ class HuntExecutionScheduler:
             staged.append(sweep)
             log.info("Staged sweep %s for hunt %s", sweep.sweep_id, h_id)
 
-            # Notify via Slack if callback configured
-            if self.notify_fn:
-                should_notify_staged = (
-                    self.settings.auto_hunt_approval_required
-                    and self.settings.slack_notify_staged_sweeps
+        # One digest for the whole staging batch (not a card per hunt).
+        if (
+            staged
+            and self.notify_fn
+            and self.settings.auto_hunt_approval_required
+            and self.settings.slack_notify_staged_sweeps
+        ):
+            try:
+                from hecate_runner.slack_blocks import (
+                    build_staged_sweep_card,
+                    build_staged_sweeps_digest_card,
                 )
-                if should_notify_staged:
-                    try:
-                        from hecate_runner.slack_blocks import build_staged_sweep_card
 
-                        blocks = build_staged_sweep_card(sweep, title=h.get("title", ""))
-                        self.notify_fn(blocks)
-                    except Exception as exc:
-                        log.warning("Could not dispatch staged sweep Slack card (%s)", exc)
+                titles = {
+                    h["hunt_id"]: str(h.get("title") or "")
+                    for h in active_hunts
+                    if h.get("hunt_id")
+                }
+                if len(staged) == 1:
+                    blocks = build_staged_sweep_card(
+                        staged[0], title=titles.get(staged[0].hunt_id, "")
+                    )
+                else:
+                    blocks = build_staged_sweeps_digest_card(staged, titles=titles)
+                self.notify_fn(blocks)
+            except Exception as exc:
+                log.warning("Could not dispatch staged sweep Slack digest (%s)", exc)
 
         return staged
 
