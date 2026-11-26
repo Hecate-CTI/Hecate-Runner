@@ -109,6 +109,12 @@ if [[ -z "$docker_sock" ]]; then
         docker_sock="/run/docker.sock"
     elif [[ -S "/var/run/docker.sock" ]]; then
         docker_sock="/var/run/docker.sock"
+    elif [[ -S "$HOME/.docker/desktop/docker.sock" ]]; then
+        docker_sock="$HOME/.docker/desktop/docker.sock"
+    elif [[ -n "${XDG_RUNTIME_DIR:-}" && -S "$XDG_RUNTIME_DIR/docker.sock" ]]; then
+        docker_sock="$XDG_RUNTIME_DIR/docker.sock"
+    elif [[ -S "/run/user/$UID/docker.sock" ]]; then
+        docker_sock="/run/user/$UID/docker.sock"
     else
         echo "Error: Could not locate Docker socket. Specify --docker-socket PATH." >&2
         exit 1

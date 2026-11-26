@@ -125,13 +125,15 @@ class FindingTriageReport:
 
 
 def _select_stratified_sample(
-    events: list[NormalizedEvent], max_sample: int = 10
+    events: list[NormalizedEvent], max_sample: int = 5
 ) -> list[NormalizedEvent]:
     """Select a bounded sample representing distinct attack stages and queries.
 
     Ensures multi-stage attack progressions have visibility across recon,
     execution, persistence, C2, and discovery rather than sampling from only
-    one dominant telemetry cluster.
+    one dominant telemetry cluster. When events share a single stage or lack
+    stage metadata, a uniform index sample spanning the full range (including
+    the last event) is preserved.
     """
     if len(events) <= max_sample:
         return events
@@ -141,6 +143,10 @@ def _select_stratified_sample(
     for ev in events:
         key = ev.stage_label or ev.stage or ev.query_file or "default"
         groups.setdefault(key, []).append(ev)
+
+    # If there is only one group (or no stage metadata), spread across the full range
+    if len(groups) <= 1:
+        return [events[i * (len(events) - 1) // (max_sample - 1)] for i in range(max_sample)]
 
     sample: list[NormalizedEvent] = []
     group_lists = list(groups.values())
@@ -425,7 +431,7 @@ class FindingTriageAgent:
 
             provider = create_router()
             # Select a stratified sample across distinct attack stages and queries
-            sample = _select_stratified_sample(events, max_sample=10)
+            sample = _select_stratified_sample(events)
             sample_data = []
             for ev in sample:
                 entry: dict[str, Any] = {
