@@ -184,26 +184,19 @@ def _draft_review_signals(result: Any) -> str:
 
 def build_draft_card(result: RunResult, *, interactive: bool = False) -> list[dict[str, Any]]:
     """Build a compact Slack card for a newly created draft hunt."""
-    research_ctx = (
-        f"`{result.research_id}`"
-        if result.research_id
-        else "source-only"
-    )
-    parked_note = (
-        f" · {result.parked_count} parked"
-        if result.parked_count > 0
-        else ""
-    )
+    research_ctx = f"`{result.research_id}`" if result.research_id else "source-only"
+    parked_note = f" · {result.parked_count} parked" if result.parked_count > 0 else ""
 
     is_enrichment = result.outcome == "incremental_enrichment"
     header_text = (
-        f"🔄 Enriched: {result.hunt_id}"
-        if is_enrichment
-        else f"📝 New draft: {result.hunt_id}"
+        f"🔄 Enriched: {result.hunt_id}" if is_enrichment else f"📝 New draft: {result.hunt_id}"
     )
     status_label = "`active` (enriched)" if is_enrichment else "`planning` — review required"
 
-    status_bits: list[str] = [f"*Status:* {status_label}{parked_note}", f"*Research:* {research_ctx}"]
+    status_bits: list[str] = [
+        f"*Status:* {status_label}{parked_note}",
+        f"*Research:* {research_ctx}",
+    ]
 
     path_str = getattr(result, "draft_path", None)
     if path_str and Path(path_str).is_file():
@@ -1476,9 +1469,8 @@ def build_siem_drift_alert_card(
     if more > 0:
         query_lines.append(f"_…and {more} more_")
 
-    body_text = (
-        f"*`{hunt_id}`* — {len(active_drifted)} drifted/missing query(ies)\n"
-        + "\n".join(query_lines)
+    body_text = f"*`{hunt_id}`* — {len(active_drifted)} drifted/missing query(ies)\n" + "\n".join(
+        query_lines
     )
 
     blocks: list[dict[str, Any]] = [
@@ -2023,11 +2015,7 @@ def build_sweep_result_card(
     if triage:
         finding_id = getattr(triage, "finding_id", "")
         if finding_id and t_verdict in ("benign_noise", "suspicious"):
-            btn_text = (
-                "🛠️ Auto-Tune (Exclude FP)"
-                if t_verdict == "benign_noise"
-                else "🛠️ Tune Rule"
-            )
+            btn_text = "🛠️ Auto-Tune (Exclude FP)" if t_verdict == "benign_noise" else "🛠️ Tune Rule"
             blocks.append(
                 {
                     "type": "actions",

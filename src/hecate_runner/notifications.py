@@ -478,10 +478,7 @@ def notify_combined_daily_digest(
         return False, "Slack unconfigured."
 
     target_channel = channel or settings.slack_channel_ops_metrics
-    text = (
-        ":bar_chart: *Hecate Daily Digest*\n"
-        f"Detection + hunting pulse → `{target_channel}`."
-    )
+    text = f":bar_chart: *Hecate Daily Digest*\nDetection + hunting pulse → `{target_channel}`."
     attachments = build_combined_daily_digest_card(detection=detection, hunting=hunting)
     return router.post_message(target_channel, text, attachments=attachments)
 
