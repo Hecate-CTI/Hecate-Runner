@@ -191,7 +191,7 @@ if [[ "$check_only" == true ]]; then
     install_cmd+=(--check)
 fi
 
-if [[ $EUID -eq 0 ]]; then
+if [[ $EUID -eq 0 || "$check_only" == true ]]; then
     "${install_cmd[@]}"
 else
     echo "Elevating privileges with sudo to install systemd units and create dedicated users..."
