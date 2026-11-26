@@ -83,7 +83,7 @@ def run_job(settings: Settings, job: str) -> None:
         from hecate_runner.drift_alerts import deliver_drift_alerts
         from hecate_runner.notifications import notify_siem_drift
 
-        deliver_drift_alerts(settings, notify_siem_drift, max_items=20)
+        deliver_drift_alerts(settings, notify_siem_drift, max_items=5)
     else:
         raise ValueError(f"Unknown maintenance job: {job}")
 

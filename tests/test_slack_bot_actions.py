@@ -39,9 +39,10 @@ def test_build_draft_card_interactive_buttons():
 
     action_ids = [el.get("action_id") for el in actions_blocks[0]["elements"]]
     assert "hecate_approve_hunt" in action_ids
-    assert "hecate_deploy_queries" in action_ids
-    assert "hecate_rerun_purple" in action_ids
     assert "hecate_park_hunt" in action_ids
+    # Deploy / purple replay moved off the card to slash commands.
+    assert "hecate_deploy_queries" not in action_ids
+    assert "hecate_rerun_purple" not in action_ids
 
     # Values must match hunt_id
     for el in actions_blocks[0]["elements"]:

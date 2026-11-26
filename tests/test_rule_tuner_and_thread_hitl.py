@@ -385,13 +385,10 @@ def test_rule_tuner_auto_tune_from_miss_preview(tmp_path: Path):
     ]
 
     res = tuner.auto_tune_from_miss("H-0707", missed_events, apply=False)
-    assert res.ok is True
-    assert "Expand Image" in res.action_summary or "powershell.exe" in res.action_summary
-    assert (
-        "+    - '\\cmd.exe'" in res.diff or "powershell.exe" in res.diff or "selection" in res.diff
-    )
-    assert "powershell.exe" in res.new_rule_yaml
-    # Original rule on disk must NOT have changed when apply=False
+    # Broadening to every PowerShell execution also matches the benign
+    # baseline. A synthetic-looking miss must not bypass that regression.
+    assert res.ok is False
+    assert "baseline regressions" in res.error
     assert rule_file.read_text(encoding="utf-8") == BASE_SIGMA_RULE
 
 
@@ -412,12 +409,10 @@ def test_rule_tuner_auto_tune_from_miss_apply(tmp_path: Path):
     ]
 
     res = tuner.auto_tune_from_miss("H-0708", missed_events, apply=True)
-    assert res.ok is True
-    persisted_yaml = rule_file.read_text(encoding="utf-8")
-    assert persisted_yaml != BASE_SIGMA_RULE
-    # Native query file should have been transpiled
-    spl_file = query_dir / "rule.spl"
-    assert spl_file.is_file()
+    assert res.ok is False
+    assert "already match" in res.error
+    assert rule_file.read_text(encoding="utf-8") == BASE_SIGMA_RULE
+    assert not (query_dir / "rule.spl").exists()
 
 
 def test_rule_tuner_suggest_tuning_for_drift(tmp_path: Path):

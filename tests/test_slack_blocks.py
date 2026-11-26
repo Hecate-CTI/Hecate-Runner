@@ -42,12 +42,9 @@ def test_build_draft_card() -> None:
     assert "H-0854" in blocks[0]["text"]["text"]
 
     section_text = blocks[1]["text"]["text"]
-    assert "H-0854" in section_text
+    assert "planning" in section_text
     assert "R-0012" in section_text
-
-    fields = blocks[2]["fields"]
-    assert "planning" in fields[0]["text"]
-    assert "2 commentary item(s) parked" in fields[1]["text"]
+    assert "2 parked" in section_text
 
 
 def test_build_hunt_completed_card() -> None:

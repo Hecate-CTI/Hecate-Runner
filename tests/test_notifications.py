@@ -311,8 +311,9 @@ def test_notify_hunt_completed_and_purple_team(
         misp_event_id="139",
     )
 
+    # Successful purple replay is suppressed even when the opt-in flag is on.
     notify_purple_team(
-        settings,
+        settings.model_copy(update={"slack_notify_purple_team": True}),
         hunt_id="H-0851",
         technique="T1071.001",
         success=True,
@@ -320,14 +321,23 @@ def test_notify_hunt_completed_and_purple_team(
         summary="Emulation beacon captured in Zeek HTTP logs",
     )
 
-    assert len(captured_posts) == 2
+    assert len(captured_posts) == 1
     assert captured_posts[0][0] == settings.slack_channel_hunts_exec
     assert "DarkGate C2 Hunting" in captured_posts[0][1]
     assert "Event #139" in captured_posts[0][1]
 
+    notify_purple_team(
+        settings.model_copy(update={"slack_notify_purple_team": True}),
+        hunt_id="H-0851",
+        technique="T1071.001",
+        success=False,
+        telemetry_count=0,
+        summary="No synthetic match",
+    )
+    assert len(captured_posts) == 2
     assert captured_posts[1][0] == settings.slack_channel_purple_team
-    assert "Synthetic Rule Match" in captured_posts[1][1]
-    assert "42 events" in captured_posts[1][1]
+    assert "Synthetic Replay Miss" in captured_posts[1][1]
+    assert "0 events" in captured_posts[1][1]
 
 
 def test_send_test_all_channels(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -383,6 +393,7 @@ def test_specialized_daily_digests_dispatch(
 ) -> None:
     from hecate_runner.notifications import (
         SlackNotificationRouter,
+        notify_combined_daily_digest,
         notify_detection_digest,
         notify_threat_hunting_digest,
         notify_threat_intel_digest,
@@ -397,13 +408,22 @@ def test_specialized_daily_digests_dispatch(
 
     monkeypatch.setattr(SlackNotificationRouter, "post_message", fake_post)
 
-    # 1. Detection Engineering
+    # Combined pulse (domain=all path)
+    ok0, _ = notify_combined_daily_digest(
+        settings,
+        detection={"total_sigma_rules": 500, "pass_rate_pct": "95%"},
+        hunting={"recent_hunts_count": 2, "total_hunts": 200, "top_techniques": ["T1059"]},
+    )
+    assert ok0 is True
+    assert dispatched[-1][0] == settings.slack_channel_ops_metrics
+    assert "Daily Digest" in dispatched[-1][1]
+
+    # Explicit single-domain digests still work
     ok1, _ = notify_detection_digest(settings, {"total_sigma_rules": 500, "pass_rate_pct": "95%"})
     assert ok1 is True
     assert dispatched[-1][0] == settings.slack_channel_detection_engineering
     assert "Detection Engineering" in dispatched[-1][1]
 
-    # 2. Threat Intel
     ok2, _ = notify_threat_intel_digest(
         settings, {"total_sources_count": 12, "recent_research_count": 4}
     )
@@ -411,7 +431,6 @@ def test_specialized_daily_digests_dispatch(
     assert dispatched[-1][0] == settings.slack_channel_threat_intel
     assert "Threat Intelligence" in dispatched[-1][1]
 
-    # 3. Threat Hunting
     ok3, _ = notify_threat_hunting_digest(settings, {"recent_hunts_count": 2, "total_hunts": 200})
     assert ok3 is True
     assert dispatched[-1][0] == settings.slack_channel_threat_hunting
@@ -582,6 +601,30 @@ def test_notify_draft_created_allows_incremental_enrichment_when_enabled(
     notify_draft_created(settings, result)
     assert len(dispatched) == 1
     assert "Incremental Enrichment applied to *H-0021*" in dispatched[0][1]
+
+
+def test_notify_purple_team_disabled_by_default(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hecate_runner.notifications import SlackNotificationRouter, notify_purple_team
+
+    assert settings.slack_notify_purple_team is False
+    posted = []
+
+    def fake_post(self, channel: str, text: str, **kw):
+        posted.append(text)
+        return True, "ok"
+
+    monkeypatch.setattr(SlackNotificationRouter, "post_message", fake_post)
+    notify_purple_team(
+        settings.model_copy(update={"slack_bot_token": "xoxb-test"}),
+        hunt_id="H-1",
+        technique="T1059",
+        success=False,
+        telemetry_count=0,
+        summary="miss",
+    )
+    assert posted == []
 
 
 def test_notify_draft_created_still_delivers_new_drafts_by_default(

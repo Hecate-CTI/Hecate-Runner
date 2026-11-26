@@ -42,7 +42,7 @@ def sanitize_worker_process_env() -> None:
 
 def _get_allowed_endpoints() -> set[tuple[str, int]]:
     """Collect (host, port) endpoints explicitly configured for LLM providers."""
-    allowed: set[tuple[str, int]] = set()
+    allowed: set[tuple[str, int]] = {("localhost", 11434), ("127.0.0.1", 11434)}
     for env_var in ("OLLAMA_HOST", "HECATE_LLM_BASE_URL", "OPENAI_BASE_URL"):
         val = os.getenv(env_var, "").strip()
         if not val:
