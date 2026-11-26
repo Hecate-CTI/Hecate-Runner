@@ -98,7 +98,9 @@ class HuntExecutionScheduler:
                             notifier.post_message(
                                 ch,
                                 "Hecate Auto Hunt Notification",
-                                blocks=None if is_attachment else (b if isinstance(b, list) else None),
+                                blocks=None
+                                if is_attachment
+                                else (b if isinstance(b, list) else None),
                                 attachments=b if isinstance(b, list) and is_attachment else None,
                             )
 

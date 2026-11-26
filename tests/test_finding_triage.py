@@ -409,44 +409,48 @@ def test_select_stratified_sample() -> None:
     """Stratified sampling selects events across distinct stages and queries."""
     from hecate_runner.execution.triage_agent import _select_stratified_sample
 
-    events = [
-        NormalizedEvent(
-            event_id=f"ev-recon-{i}",
-            hunt_id="H-0038",
-            target_siem="splunk",
-            timestamp="2026-11-26T19:00:00Z",
-            stage="recon_delivery",
-            stage_label="Recon & Delivery",
-            query_file="dns_query.spl",
-            domain="profitnow.io",
-        )
-        for i in range(10)
-    ] + [
-        NormalizedEvent(
-            event_id=f"ev-exec-{i}",
-            hunt_id="H-0038",
-            target_siem="splunk",
-            timestamp="2026-11-26T19:05:00Z",
-            stage="execution",
-            stage_label="Process Execution",
-            query_file="process_creation.spl",
-            process_name="/bin/bash",
-            command_line="bash .UlaccK",
-        )
-        for i in range(10)
-    ] + [
-        NormalizedEvent(
-            event_id=f"ev-persist-{i}",
-            hunt_id="H-0038",
-            target_siem="splunk",
-            timestamp="2026-11-26T19:10:00Z",
-            stage="persistence_evasion",
-            stage_label="Persistence",
-            query_file="file_event.spl",
-            file_path="/Users/lab/Library/LaunchAgents/com.apple.softwareupdated.plist",
-        )
-        for i in range(10)
-    ]
+    events = (
+        [
+            NormalizedEvent(
+                event_id=f"ev-recon-{i}",
+                hunt_id="H-0038",
+                target_siem="splunk",
+                timestamp="2026-11-26T19:00:00Z",
+                stage="recon_delivery",
+                stage_label="Recon & Delivery",
+                query_file="dns_query.spl",
+                domain="profitnow.io",
+            )
+            for i in range(10)
+        ]
+        + [
+            NormalizedEvent(
+                event_id=f"ev-exec-{i}",
+                hunt_id="H-0038",
+                target_siem="splunk",
+                timestamp="2026-11-26T19:05:00Z",
+                stage="execution",
+                stage_label="Process Execution",
+                query_file="process_creation.spl",
+                process_name="/bin/bash",
+                command_line="bash .UlaccK",
+            )
+            for i in range(10)
+        ]
+        + [
+            NormalizedEvent(
+                event_id=f"ev-persist-{i}",
+                hunt_id="H-0038",
+                target_siem="splunk",
+                timestamp="2026-11-26T19:10:00Z",
+                stage="persistence_evasion",
+                stage_label="Persistence",
+                query_file="file_event.spl",
+                file_path="/Users/lab/Library/LaunchAgents/com.apple.softwareupdated.plist",
+            )
+            for i in range(10)
+        ]
+    )
 
     sample = _select_stratified_sample(events, max_sample=6)
     assert len(sample) == 6
@@ -488,7 +492,9 @@ def test_scheduler_pivot_on_recommended_action() -> None:
     assert should_pivot is True
 
 
-def test_scheduler_dual_channel_notification(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_scheduler_dual_channel_notification(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """HuntExecutionScheduler dispatches sweep notifications to executive and threat hunting channels."""
     posted_channels: list[str] = []
 
@@ -517,4 +523,3 @@ def test_scheduler_dual_channel_notification(monkeypatch: pytest.MonkeyPatch, tm
     scheduler.notify_fn([{"type": "section", "text": {"type": "mrkdwn", "text": "test"}}])
     assert "C0CC5R9S4EP" in posted_channels
     assert "C0CCA3NLN0N" in posted_channels
-
