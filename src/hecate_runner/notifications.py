@@ -296,6 +296,7 @@ def notify_purple_team(
     success: bool,
     telemetry_count: int,
     summary: str,
+    replay_status: str | None = None,
 ) -> None:
     """Report synthetic rule replay; a match is not live detection validation."""
     router = SlackNotificationRouter(settings)
@@ -303,7 +304,9 @@ def notify_purple_team(
         return
 
     status_icon = ":white_check_mark:" if success else ":warning:"
-    status_label = "Synthetic Rule Match" if success else "No Synthetic Rule Match"
+    status_label = replay_status or (
+        "Synthetic Rule Match" if success else "No Synthetic Rule Match"
+    )
 
     text = (
         f"{status_icon} *Purple Team Synthetic Replay: {hunt_id}*\n"
@@ -320,6 +323,7 @@ def notify_purple_team(
         success=success,
         telemetry_count=telemetry_count,
         summary=summary,
+        replay_status=replay_status,
     )
     router.post_message(settings.slack_channel_purple_team, text, attachments=attachments)
 

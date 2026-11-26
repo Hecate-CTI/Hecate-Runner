@@ -520,11 +520,14 @@ def build_purple_team_card(
     summary: str,
     log_source: str = "Synthetic event samples",
     emulation_mode: str = "Synthetic replay (no execution)",
+    replay_status: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build a synthetic replay card without claiming live validation."""
     color = COLOR_SUCCESS if success else COLOR_WARNING
     status_icon = "✅" if success else "⚠️"
-    status_title = "Synthetic Rule Match" if success else "No Synthetic Rule Match"
+    status_title = replay_status or (
+        "Synthetic Rule Match" if success else "No Synthetic Rule Match"
+    )
 
     blocks: list[dict[str, Any]] = [
         {

@@ -6,7 +6,7 @@ from hecate_runner.config import Settings
 from hecate_runner.purple_team import run_continuous_replay_sweep
 
 
-def test_continuous_replay_sweep_with_miss_generates_tuning_suggestion(tmp_path: Path):
+def test_unrelated_technique_samples_never_generate_tuning_suggestions(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     hunt_id = "H-0099"
@@ -58,19 +58,11 @@ The adversary leveraged inline python code execution:
     res = outcomes[0]
     assert res["hunt_id"] == hunt_id
     assert res["total_rules"] == 1
-    assert res["passed_rules"] == 0  # Missing because rule only matches /sh, not python3
-
-    # Verify tuning suggestion was generated and persisted
-    sugg = res.get("tuning_suggestion")
-    assert sugg is not None
-    assert sugg["hunt_id"] == hunt_id
-    assert "Expand Image" in sugg["action_summary"] or "python3" in sugg["action_summary"]
-
-    persisted_file = workspace / ".hecate" / "tuning_suggestions" / f"{hunt_id}.json"
-    assert persisted_file.is_file()
-    saved_data = json.loads(persisted_file.read_text(encoding="utf-8"))
-    assert saved_data["hunt_id"] == hunt_id
-    assert "diff" in saved_data
+    assert res["passed_rules"] == 0
+    assert res["not_assessed_rules"] == 1
+    assert res["failed_rules"] == 0
+    assert res["tuning_suggestion"] is None
+    assert not (workspace / ".hecate/tuning_suggestions/H-0099.json").exists()
 
 
 def test_continuous_replay_sweep_clean_pass(tmp_path: Path):
@@ -118,10 +110,30 @@ platform:
         purple_team_continuous_replay_interval_sec=10,
     )
 
+    import hashlib
+
+    cases = workspace / ".hecate/replay_cases/H-0098.json"
+    cases.parent.mkdir(parents=True)
+    cases.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "hunt_id": hunt_id,
+                "rules": {
+                    "rule.yml": {
+                        "rule_sha256": hashlib.sha256(rule_yaml.encode()).hexdigest(),
+                        "source_reference": "internal:reviewed-python-execution",
+                        "positive": [{"Image": "/usr/bin/python3"}],
+                        "benign": [{"Image": "/usr/bin/true"}],
+                    }
+                },
+            }
+        )
+    )
     outcomes = run_continuous_replay_sweep(settings)
     assert len(outcomes) == 1
     res = outcomes[0]
-    assert res["passed_rules"] >= 1
+    assert res["passed_rules"] == 1
     assert res["tuning_suggestion"] is None
 
 
