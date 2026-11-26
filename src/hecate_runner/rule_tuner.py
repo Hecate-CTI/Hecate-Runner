@@ -266,7 +266,9 @@ class RuleTuner:
         updated_yaml = yaml.dump(rule_dict, sort_keys=False)
         return updated_yaml, summary
 
-    def tune_hunt_rule(self, hunt_id: str, instruction: str) -> RuleTuningResult:
+    def tune_hunt_rule(
+        self, hunt_id: str, instruction: str, *, rule_file: Path | None = None
+    ) -> RuleTuningResult:
         """Find the Sigma rule for a hunt, apply tuning instruction, and persist changes."""
         norm_hunt_id = normalize_hunt_id(hunt_id)
         query_dir = query_directory(self.workspace, norm_hunt_id)
@@ -287,15 +289,18 @@ class RuleTuner:
                 error=f"No Sigma YAML files found under {query_dir}",
             )
 
-        rule_file = sigma_files[0]
-        try:
-            from hecate_runner.bas.rule_selection import select_primary_sigma_rule
+        if rule_file is None:
+            rule_file = sigma_files[0]
+            try:
+                from hecate_runner.bas.rule_selection import select_primary_sigma_rule
 
-            selected = select_primary_sigma_rule(query_dir)
-            if selected is not None:
-                rule_file = selected.path
-        except Exception as sel_exc:
-            log.debug("Primary Sigma selection fell back to first file: %s", sel_exc)
+                selected = select_primary_sigma_rule(query_dir)
+                if selected is not None:
+                    rule_file = selected.path
+            except Exception as sel_exc:
+                log.debug("Primary Sigma selection fell back to first file: %s", sel_exc)
+        if rule_file.absolute().parent != query_dir.absolute():
+            raise ValueError("Tuning target must belong to the selected hunt")
         original_yaml = read_artifact(rule_file, self.workspace)
 
         try:
@@ -498,6 +503,44 @@ class RuleTuner:
             resolved_rule_file = sigma_files[0]
 
         original_yaml = read_artifact(resolved_rule_file, self.workspace)
+
+        if resolved_rule_file.absolute().parent != query_dir.absolute():
+            raise ValueError("Tuning target must belong to the selected hunt")
+        # Synthetic or placeholder-only failures are not evidence for widening
+        # a detection. Manual analyst edits remain available via tune_hunt_rule.
+        unsafe = re.compile(
+            r"(?i)(?<![a-z0-9-])(?:[a-z0-9-]+\.)*example\.(?:com|net|org)\b|\.(?:invalid|test)\b"
+        )
+        if not missed_events or any(
+            not isinstance(event, dict)
+            or str(event.get("_hecate_synthetic", "")).lower() in {"true", "1"}
+            or str(event.get("synthetic", "")).lower() in {"true", "1"}
+            or unsafe.search(str(event))
+            for event in missed_events
+        ):
+            return RuleTuningResult(
+                ok=False,
+                hunt_id=norm_hunt_id,
+                action_summary="",
+                error="Automatic expansion requires non-placeholder, independently collected missed events",
+            )
+        from hecate_agent.core.sigma_evaluator import SigmaEvaluator
+
+        from hecate_runner.purple_team import get_benign_sample_for_rule
+
+        baseline = get_benign_sample_for_rule(original_yaml)
+        try:
+            original_score = SigmaEvaluator.evaluate_rule(original_yaml, missed_events, baseline)
+            if original_score.errors:
+                raise ValueError("Original rule evaluation failed")
+            if original_score.true_positives:
+                raise ValueError(
+                    "Provided events already match the selected rule; they are not all misses"
+                )
+        except Exception as exc:
+            return RuleTuningResult(
+                ok=False, hunt_id=norm_hunt_id, action_summary="", error=str(exc)
+            )
 
         if not instruction:
             if not missed_events:
@@ -741,9 +784,7 @@ class RuleTuner:
 
             instruction = derived_instruction
 
-        if apply:
-            return self.tune_hunt_rule(norm_hunt_id, instruction)
-
+        # Verify a preview before either returning it or applying it.
         # Generate preview without persisting to disk
         try:
             new_yaml, summary = self.tune_rule_yaml(original_yaml, instruction)
@@ -765,23 +806,24 @@ class RuleTuner:
                 error=f"Semantic validation failed: {summary}",
             )
 
-        # Verify that the candidate actually matches the missed events
+        # Fail closed on evaluator errors, incomplete recall or baseline regressions.
         try:
-            from hecate_agent.core.sigma_evaluator import SigmaEvaluator
-
-            eval_res = SigmaEvaluator.evaluate_rule(
-                new_yaml, intrusion_events=cat_events, baseline_events=[]
-            )
-            if eval_res.true_positives == 0:
-                return RuleTuningResult(
-                    ok=False,
-                    hunt_id=norm_hunt_id,
-                    action_summary="",
-                    rule_file=resolved_rule_file,
-                    error="Derived tuning does not resolve the missed telemetry",
+            eval_res = SigmaEvaluator.evaluate_rule(new_yaml, missed_events, baseline)
+            if (
+                eval_res.errors
+                or eval_res.false_negatives
+                or eval_res.true_positives != len(missed_events)
+                or eval_res.false_positives > original_score.false_positives
+            ):
+                raise ValueError(
+                    "Candidate does not resolve all misses without baseline regressions"
                 )
-        except Exception as eval_exc:
-            log.debug("Verification of tuned rule candidate skipped: %s", eval_exc)
+        except Exception as exc:
+            return RuleTuningResult(
+                ok=False, hunt_id=norm_hunt_id, action_summary="", error=str(exc)
+            )
+        if apply:
+            return self.tune_hunt_rule(norm_hunt_id, instruction, rule_file=resolved_rule_file)
 
         diff_lines = list(
             difflib.unified_diff(
