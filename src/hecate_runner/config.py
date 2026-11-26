@@ -866,6 +866,15 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_SLACK_NOTIFY_STAGED_SWEEPS",
         description="Post Slack notifications when recurring sweeps are staged pending manual approval.",
     )
+    slack_notify_purple_team: bool = Field(
+        default=False,
+        alias="HECATE_RUNNER_SLACK_NOTIFY_PURPLE_TEAM",
+        description=(
+            "Post Slack notifications for purple-team synthetic replay. "
+            "When enabled, only misses/tuning suggestions are sent — successful "
+            "replays stay quiet (already summarized on draft cards)."
+        ),
+    )
     slack_channel_ops_metrics: str = Field(
         default="#hecate-ops-metrics",
         alias="SLACK_CHANNEL_OPS_METRICS",
