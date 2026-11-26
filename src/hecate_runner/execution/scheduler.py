@@ -443,7 +443,7 @@ class HuntExecutionScheduler:
                 )
             )
         )
-        if should_pivot:
+        if should_pivot and triage_report is not None:
             try:
                 from hecate_runner.execution.pivot_engine import PivotExecutionEngine
 
