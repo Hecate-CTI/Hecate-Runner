@@ -63,6 +63,7 @@ from hecate_runner.commands.doctor import (
 )
 from hecate_runner.commands.publication import publish_review
 from hecate_runner.commands.release import release_app
+from hecate_runner.commands.replay import replay_check
 from hecate_runner.commands.siem import (
     audit_siem_cmd,
     drift_history_cmd,
@@ -727,6 +728,7 @@ app.command("query-versions")(query_versions_cmd)
 
 
 # --- BAS Commands ----------------------------------------------------------
+app.command("replay-check")(replay_check)
 app.command("bas-check")(bas_check_cmd)
 app.command("bas-install-procedures")(bas_install_procedures_cmd)
 app.command("bas-reset")(bas_reset_cmd)

@@ -703,155 +703,15 @@ def publish_reviewed_hunt(
 
 
 def replay_hunt_purple_team(workspace: Path | str, hunt_id: str) -> dict[str, Any]:
-    """Replay Sigma rules for a hunt against synthetic adversary telemetry."""
+    """Evaluate independent cases; rule-derived sanity never counts as recall."""
+    from hecate_runner.continuous_replay import evaluate_hunt_replay
+
     if not is_valid_hunt_id(hunt_id):
         return {"ok": False, "hunt_id": hunt_id, "error": f"Invalid hunt ID: {hunt_id}"}
-
-    workspace = Path(workspace)
     try:
-        query_dir = query_directory(Path(workspace), hunt_id)
+        return evaluate_hunt_replay(Path(workspace), hunt_id)
     except ValueError as exc:
         return {"ok": False, "hunt_id": hunt_id, "error": str(exc)}
-
-    if not query_dir.exists() or query_dir.is_symlink() or not query_dir.is_dir():
-        return {
-            "ok": False,
-            "hunt_id": hunt_id,
-            "error": f"No Sigma rules found in queries/{hunt_id}",
-        }
-
-    sigma_files = sorted(
-        [
-            f
-            for f in list(query_dir.glob("*.yml")) + list(query_dir.glob("*.yaml"))
-            if not f.is_symlink() and f.is_file()
-        ]
-    )
-
-    if not sigma_files:
-        return {
-            "ok": False,
-            "hunt_id": hunt_id,
-            "error": f"No Sigma rules found in queries/{hunt_id}",
-        }
-
-    import yaml
-
-    from hecate_runner.lifecycle import find_hunt_path, parse_hunt_frontmatter
-    from hecate_runner.purple_team import (
-        get_benign_sample_for_rule,
-        is_scoped_threat_rule,
-        replay_events,
-        replay_rule,
-    )
-
-    hunt_path = find_hunt_path(workspace, hunt_id)
-    cti_text = ""
-    techniques: list[str] = []
-    platforms: list[str] = []
-
-    if hunt_path and hunt_path.is_file():
-        try:
-            fm, body, _ = parse_hunt_frontmatter(read_artifact(hunt_path, workspace))
-            techniques = list(fm.get("techniques") or [])
-            platforms = list(fm.get("platform") or [])
-            cti_text = body or ""
-            spawned = str(fm.get("spawned_from") or "").strip()
-            if spawned:
-                if not re.fullmatch(r"R-[0-9]{1,12}", spawned):
-                    raise ValueError("Invalid linked research ID")
-                res_file = workspace_path(workspace, "research", f"{spawned}.md")
-                if res_file.is_file():
-                    cti_text += "\n" + read_artifact(res_file, workspace)
-        except Exception as exc:
-            log.warning("Could not parse hunt metadata for purple team replay %s: %s", hunt_id, exc)
-
-    events_by_cat = replay_events(
-        records=[],
-        artifacts=[],
-        cti_text=cti_text,
-        techniques=techniques,
-        enable_atomic=True,
-        platforms=platforms,
-    )
-
-    total_events = sum(len(v) for v in events_by_cat.values())
-    replayed = 0
-    passed = 0
-    holdout_scored = holdout_passed = holdout_failed = 0
-
-    for s_file in sigma_files:
-        rule_yaml = read_artifact(s_file, workspace)
-        cat = ""
-        try:
-            data = yaml.safe_load(rule_yaml)
-            if isinstance(data, dict):
-                cat = str(data.get("logsource", {}).get("category", "") or "")
-        except Exception:
-            pass
-
-        events = list(events_by_cat.get(cat, []))
-
-        # Synthesize rule-specific telemetry to verify self-consistency and avoid
-        # false misses against generic atomic red team emulation tests.
-        synth_tp: dict[str, Any] | None = None
-        synth_benign: list[dict[str, Any]] = []
-        try:
-            from hecate_runner.bas.synthesizer import synthesize_events_from_rule
-
-            synth_res = synthesize_events_from_rule(rule_yaml)
-            if synth_res and isinstance(synth_res[0], dict):
-                synth_tp = synth_res[0]
-                if len(synth_res) > 1 and isinstance(synth_res[1], list):
-                    synth_benign = synth_res[1]
-        except Exception:
-            pass
-
-        res = None
-        if events:
-            res = replay_rule(rule_yaml, events, baseline=get_benign_sample_for_rule(rule_yaml))
-
-        # If rule did not match generic technique events or no events exist in this category,
-        # and the rule is a scoped threat rule (vendor, PoC, IOC, or parent-scoped), fallback
-        # to evaluating against its intended threat-specific synthesized telemetry to avoid
-        # false misses against generic atomic red team tests.
-        if (
-            (res is None or not res.matched)
-            and is_scoped_threat_rule(data)
-            and synth_tp is not None
-        ):
-            synth_eval = replay_rule(
-                rule_yaml,
-                [synth_tp],
-                baseline=synth_benign or get_benign_sample_for_rule(rule_yaml),
-            )
-            if synth_eval.matched or res is None:
-                res = synth_eval
-
-        if res is None:
-            res = replay_rule(rule_yaml, [], baseline=get_benign_sample_for_rule(rule_yaml))
-
-        replayed += 1
-        if res.holdout.get("status") in {"passed", "failed", "error"}:
-            holdout_scored += 1
-            holdout_passed += res.holdout["status"] == "passed"
-            holdout_failed += res.holdout["status"] in {"failed", "error"}
-        if res.matched:
-            passed += 1
-
-    return {
-        "ok": True,
-        "hunt_id": hunt_id,
-        "total_rules": replayed,
-        "passed_rules": passed,
-        "fidelity": f"{(passed / replayed * 100):.0f}%" if replayed else "0%",
-        "sample_events_count": total_events,
-        "evaluation_scope": "synthetic_replay",
-        "holdout_rules_scored": holdout_scored,
-        "holdout_rules_passed": holdout_passed,
-        "holdout_rules_failed": holdout_failed,
-        "holdout_rules_unavailable": replayed - holdout_scored,
-    }
 
 
 def execute_adhoc_hunt(
@@ -1128,10 +988,12 @@ class SlackBotService:
                 msg = (
                     f"🧪 *Purple Team Replay for `{hunt_id}` Completed*\n"
                     f"• *Requested by:* <@{user_info.get('id', user_name)}>\n"
-                    f"• *Rules Tested:* {res.get('total_rules')}\n"
-                    f"• *Rules Validated:* {res.get('passed_rules')}\n"
-                    f"• *Detection Fidelity:* {res.get('fidelity')}\n"
-                    f"• *Sandbox Telemetry:* {res.get('sample_events_count')} events evaluated"
+                    f"• *Rules Found:* {res.get('total_rules')}\n"
+                    f"• *Independent Checks Passed:* {res.get('passed_rules')}\n"
+                    f"• *Failed / Errors:* {res.get('failed_rules', 0)} / {res.get('error_rules', 0)}\n"
+                    f"• *Not Assessed:* {res.get('not_assessed_rules', 0)}\n"
+                    f"• *Assessed Case Pass Rate:* {res.get('fidelity')}\n"
+                    f"• *Synthetic Rule-Event Checks:* {res.get('sample_events_count')} events evaluated"
                 )
             else:
                 msg = f"❌ *Purple Team Replay failed for `{hunt_id}`:* {res.get('error')}"
@@ -1953,10 +1815,12 @@ class SlackBotService:
                     msg = (
                         f"🧪 *Purple Team Replay for `{hunt_id}` Completed*\n"
                         f"• *Requested by:* <@{user_id}>\n"
-                        f"• *Rules Tested:* {res.get('total_rules')}\n"
-                        f"• *Rules Validated:* {res.get('passed_rules')}\n"
-                        f"• *Detection Fidelity:* {res.get('fidelity')}\n"
-                        f"• *Sandbox Telemetry:* {res.get('sample_events_count')} events evaluated"
+                        f"• *Rules Found:* {res.get('total_rules')}\n"
+                        f"• *Independent Checks Passed:* {res.get('passed_rules')}\n"
+                        f"• *Failed / Errors:* {res.get('failed_rules', 0)} / {res.get('error_rules', 0)}\n"
+                        f"• *Not Assessed:* {res.get('not_assessed_rules', 0)}\n"
+                        f"• *Assessed Case Pass Rate:* {res.get('fidelity')}\n"
+                        f"• *Synthetic Rule-Event Checks:* {res.get('sample_events_count')} events evaluated"
                     )
                 else:
                     msg = f"❌ *Purple Team Replay failed for `{hunt_id}`:* {res.get('error')}"
@@ -2025,10 +1889,18 @@ class SlackBotService:
                 tune_res = tuner.tune_hunt_rule(hunt_id, instruction)
                 if tune_res.ok:
                     purple_res = replay_hunt_purple_team(self.settings.hecate_workspace, hunt_id)
-                    fidelity = purple_res.get("fidelity", "100%") if purple_res.get("ok") else "N/A"
+                    fidelity = (
+                        purple_res.get("fidelity", "unavailable") if purple_res.get("ok") else "N/A"
+                    )
                     passed = purple_res.get("passed_rules", 0) if purple_res.get("ok") else 0
                     total = purple_res.get("total_rules", 0) if purple_res.get("ok") else 0
-                    purple_summary = f"{passed}/{total} rules passed ({fidelity} fidelity)"
+                    purple_summary = (
+                        f"{passed}/{total} independent checks passed; "
+                        f"{purple_res.get('not_assessed_rules', 0)} not assessed; "
+                        f"{purple_res.get('failed_rules', 0)} failed; "
+                        f"{purple_res.get('error_rules', 0)} errors ({fidelity} of assessed cases). "
+                        "Live detection remains unverified."
+                    )
 
                     gh_summary = ""
                     if self.settings.github_publishing_enabled:
@@ -2197,10 +2069,18 @@ class SlackBotService:
 
             if res.ok:
                 purple_res = replay_hunt_purple_team(self.settings.hecate_workspace, hunt_id)
-                fidelity = purple_res.get("fidelity", "100%") if purple_res.get("ok") else "N/A"
+                fidelity = (
+                    purple_res.get("fidelity", "unavailable") if purple_res.get("ok") else "N/A"
+                )
                 passed = purple_res.get("passed_rules", 0) if purple_res.get("ok") else 0
                 total = purple_res.get("total_rules", 0) if purple_res.get("ok") else 0
-                purple_summary = f"{passed}/{total} rules passed ({fidelity} fidelity)"
+                purple_summary = (
+                    f"{passed}/{total} independent checks passed; "
+                    f"{purple_res.get('not_assessed_rules', 0)} not assessed; "
+                    f"{purple_res.get('failed_rules', 0)} failed; "
+                    f"{purple_res.get('error_rules', 0)} errors ({fidelity} of assessed cases). "
+                    "Live detection remains unverified."
+                )
 
                 gh_summary = ""
                 if self.settings.github_publishing_enabled:

@@ -81,16 +81,28 @@ class HuntExecutionScheduler:
 
                 notifier = SlackNotificationRouter(self.settings)
                 if notifier.is_configured:
-                    channel = self.settings.slack_channel_hunts_exec or "#all-hecate-hunt"
+                    channels: list[str] = []
+                    if self.settings.slack_channel_hunts_exec:
+                        channels.append(self.settings.slack_channel_hunts_exec)
+                    if (
+                        self.settings.slack_channel_threat_hunting
+                        and self.settings.slack_channel_threat_hunting not in channels
+                    ):
+                        channels.append(self.settings.slack_channel_threat_hunting)
+                    if not channels:
+                        channels.append("#all-hecate-hunt")
 
                     def _notify(b: list[dict[str, Any]] | str) -> None:
                         is_attachment = isinstance(b, list) and len(b) > 0 and "color" in b[0]
-                        notifier.post_message(
-                            channel,
-                            "Hecate Auto Hunt Notification",
-                            blocks=None if is_attachment else (b if isinstance(b, list) else None),
-                            attachments=b if isinstance(b, list) and is_attachment else None,
-                        )
+                        for ch in channels:
+                            notifier.post_message(
+                                ch,
+                                "Hecate Auto Hunt Notification",
+                                blocks=None
+                                if is_attachment
+                                else (b if isinstance(b, list) else None),
+                                attachments=b if isinstance(b, list) and is_attachment else None,
+                            )
 
                     self.notify_fn = _notify
             except Exception as exc:
@@ -254,20 +266,33 @@ class HuntExecutionScheduler:
             staged.append(sweep)
             log.info("Staged sweep %s for hunt %s", sweep.sweep_id, h_id)
 
-            # Notify via Slack if callback configured
-            if self.notify_fn:
-                should_notify_staged = (
-                    self.settings.auto_hunt_approval_required
-                    and self.settings.slack_notify_staged_sweeps
+        # One digest for the whole staging batch (not a card per hunt).
+        if (
+            staged
+            and self.notify_fn
+            and self.settings.auto_hunt_approval_required
+            and self.settings.slack_notify_staged_sweeps
+        ):
+            try:
+                from hecate_runner.slack_blocks import (
+                    build_staged_sweep_card,
+                    build_staged_sweeps_digest_card,
                 )
-                if should_notify_staged:
-                    try:
-                        from hecate_runner.slack_blocks import build_staged_sweep_card
 
-                        blocks = build_staged_sweep_card(sweep, title=h.get("title", ""))
-                        self.notify_fn(blocks)
-                    except Exception as exc:
-                        log.warning("Could not dispatch staged sweep Slack card (%s)", exc)
+                titles = {
+                    h["hunt_id"]: str(h.get("title") or "")
+                    for h in active_hunts
+                    if h.get("hunt_id")
+                }
+                if len(staged) == 1:
+                    blocks = build_staged_sweep_card(
+                        staged[0], title=titles.get(staged[0].hunt_id, "")
+                    )
+                else:
+                    blocks = build_staged_sweeps_digest_card(staged, titles=titles)
+                self.notify_fn(blocks)
+            except Exception as exc:
+                log.warning("Could not dispatch staged sweep Slack digest (%s)", exc)
 
         return staged
 
@@ -403,13 +428,22 @@ class HuntExecutionScheduler:
                 log.warning("Finding triage failed for sweep %s (%s)", staged.sweep_id, exc)
 
         # Execute autonomous pivots for confirmed or suspicious threat findings
-        if (
+        min_pivot_conf = getattr(self.settings, "auto_hunt_pivot_min_confidence", 0.70)
+        should_pivot = (
             triage_report
-            and triage_report.verdict in ("true_positive", "suspicious")
             and getattr(self.settings, "auto_hunt_pivots_enabled", True)
-            and triage_report.confidence
-            >= getattr(self.settings, "auto_hunt_pivot_min_confidence", 0.70)
-        ):
+            and (
+                (
+                    triage_report.verdict in ("true_positive", "suspicious")
+                    and triage_report.confidence >= min_pivot_conf
+                )
+                or (
+                    triage_report.recommended_action == "pivot"
+                    and triage_report.confidence >= max(0.50, min_pivot_conf - 0.20)
+                )
+            )
+        )
+        if should_pivot and triage_report is not None:
             try:
                 from hecate_runner.execution.pivot_engine import PivotExecutionEngine
 

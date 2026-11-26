@@ -276,11 +276,12 @@ def test_build_siem_drift_alert_card(mock_workspace: Path):
     card = build_siem_drift_alert_card("H-0007", drifted, settings, interactive=True)
     assert len(card) == 1
     blocks = card[0]["blocks"]
-    assert any("⚠️ SIEM Query Drift: H-0007" in b.get("text", {}).get("text", "") for b in blocks)
+    assert any("⚠️ SIEM drift: H-0007" in b.get("text", {}).get("text", "") for b in blocks)
     actions = [b for b in blocks if b.get("type") == "actions"]
     assert len(actions) == 1
     action_ids = [btn.get("action_id") for btn in actions[0]["elements"]]
     assert "hecate_reconcile_drift" in action_ids
+    assert "hecate_deploy_queries" not in action_ids
 
 
 def test_notify_siem_drift(mock_workspace: Path):

@@ -58,10 +58,15 @@ For security, background services run under unprivileged, non-login system accou
   > Never put publishing keys (`SPLUNK_WRITE_TOKEN`, GitHub App private keys, or Slack app tokens) into `reader.env`.
 
 * **`writer.env` (`hecate-writer`):**
-  Publishing permissions. Contains `SPLUNK_WRITE_TOKEN`, GitHub App private key paths, and MISP export keys.
+  Publishing and maintenance permissions. Contains `SPLUNK_WRITE_TOKEN`, `SPLUNK_READ_TOKEN` (for SIEM audits), GitHub App private key paths, and MISP export keys.
+  - Enable autonomous SIEM drift reconciliation: `HECATE_RUNNER_SIEM_DRIFT_AUTO_RECONCILE=true`.
 
 * **`slack.env` (`hecate-slack`):**
-  Slack integration tokens (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`).
+  Slack integration tokens (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`) and pinned channel IDs:
+  - `SLACK_CHANNEL_HUNTS_EXEC=C0CC5R9S4EP` (Executive hunts & verified true-positives)
+  - `SLACK_CHANNEL_THREAT_HUNTING=C0CCA3NLN0N` (Operational hunting & sweep findings)
+  - `SLACK_CHANNEL_OPS_METRICS=C0CC6PG0GAH` (Consolidated 24h operational pulse)
+  - (Optional domain digests: `DETECTION_ENGINEERING`, `THREAT_INTEL`, `EXPLOITS`, `SANDBOX`, `APT`, `CLOUD`, `C2`)
 
 Starter templates are located in [`deploy/service-env/`](../deploy/service-env/).
 
@@ -79,24 +84,47 @@ systemctl status hecate-runner-daemon.service hecate-runner-maintenance.service 
 # Daemon orchestrator logs
 journalctl -u hecate-runner-daemon.service -f
 
-# Maintenance / publisher logs
+# Maintenance / publisher / SIEM drift logs
 journalctl -u hecate-runner-maintenance.service -f
+
+# Interactive Slack bot logs
+journalctl -u hecate-slack-bot.service -f
 ```
 
 ### Updating Runtime After Code Changes
-Production services run against an immutable, standalone runtime in `/opt/hecate/runtime`. When code changes are pulled into `Hecate-Core` or `Hecate-Runner`, do **not** use `pip install`. Use the atomic runtime updater:
+Production services run against an immutable, standalone runtime in `/opt/hecate/runtime`. When code changes are pulled into `Hecate-Core` or `Hecate-Runner`, do **not** use `pip install`. Use the atomic runtime updater with the bundled interpreter:
 
 ```bash
-# 1. Build a new runtime stage as an ordinary user:
+# 1. Build a new runtime stage as an ordinary unprivileged user:
 scripts/prepare-service-runtime.sh ../Hecate-Core /tmp/hecate-runtime-stage
 
 # 2. Hot-swap the runtime transactionally with automatic rollback support:
-sudo python3 scripts/update-service-runtime.py --runtime-stage /tmp/hecate-runtime-stage
+sudo /opt/hecate/runtime/venv/bin/python scripts/update-service-runtime.py --runtime-stage /tmp/hecate-runtime-stage
 
 # 3. Clean up the stage directory:
 rm -rf /tmp/hecate-runtime-stage
 ```
 Snapshots of prior runtimes are saved in `/var/backups/hecate-service-isolation/`.
+
+---
+
+## 6. Troubleshooting & Operational Guardrails
+
+* **Interpreter Invocation (`pydantic_core` error):**
+  Always invoke the bundled runtime interpreter directly (`/opt/hecate/runtime/venv/bin/python`), rather than system `python3` or passing `sys.path`. The system Python may lack compiled native wheels.
+
+* **Workspace Permissions (`PermissionError` on .env or logs):**
+  The shared workspace directory and files must be accessible by the `hecate-data` group.
+  Ensure workspace files maintain mode `0660` (or `2770` for directories) owned by `<operator>:hecate-data`.
+  Run file operations inside the workspace via `sg hecate-data -c "..."`.
+
+* **SIEM Query Synchronization & Drift:**
+  To check whether live deployed queries in your SIEM match local git definitions:
+  ```bash
+  hecate-runner audit-siem --platform splunk
+  # To force immediate reconciliation:
+  hecate-runner reconcile-queries --all --platform splunk
+  ```
 
 ### Update models with a runtime release
 

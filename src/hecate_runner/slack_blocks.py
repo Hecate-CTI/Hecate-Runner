@@ -183,66 +183,40 @@ def _draft_review_signals(result: Any) -> str:
 
 
 def build_draft_card(result: RunResult, *, interactive: bool = False) -> list[dict[str, Any]]:
-    """Build a rich Slack card for a newly created draft hunt."""
-    research_ctx = (
-        f"Linked to research context `{result.research_id}`"
-        if result.research_id
-        else "Source-only extraction (no web search)"
-    )
-    parked_text = (
-        f"• {result.parked_count} commentary item(s) parked during intake triage"
-        if result.parked_count > 0
-        else "• Clean triage: zero items parked"
-    )
+    """Build a compact Slack card for a newly created draft hunt."""
+    research_ctx = f"`{result.research_id}`" if result.research_id else "source-only"
+    parked_note = f" · {result.parked_count} parked" if result.parked_count > 0 else ""
 
     is_enrichment = result.outcome == "incremental_enrichment"
     header_text = (
-        f"🔄 Campaign Dossier Enriched: {result.hunt_id}"
-        if is_enrichment
-        else f"📝 New Draft Hunt Initiated: {result.hunt_id}"
+        f"🔄 Enriched: {result.hunt_id}" if is_enrichment else f"📝 New draft: {result.hunt_id}"
     )
-    status_label = (
-        "`active` (Dossier incrementally updated)"
-        if is_enrichment
-        else "`planning` (Awaiting review)"
-    )
+    status_label = "`active` (enriched)" if is_enrichment else "`planning` — review required"
 
-    purple_text = "⚪ Replay pending"
-    bas_text = "⚪ Detonation pending"
+    status_bits: list[str] = [
+        f"*Status:* {status_label}{parked_note}",
+        f"*Research:* {research_ctx}",
+    ]
+
     path_str = getattr(result, "draft_path", None)
     if path_str and Path(path_str).is_file():
         try:
             from hecate_runner.lifecycle import parse_hunt_frontmatter
 
             fm, _, _ = parse_hunt_frontmatter(Path(path_str).read_text(encoding="utf-8"))
-            pt_eval = fm.get("purple_team_rules_evaluated", 0)
-            pt_matched = fm.get("purple_team_rules_replay_matched", 0)
-            pt_val = fm.get("purple_team_validated", False)
+            pt_eval = int(fm.get("purple_team_rules_evaluated", 0) or 0)
+            pt_matched = int(fm.get("purple_team_rules_replay_matched", 0) or 0)
             if pt_eval > 0:
                 icon = "✅" if pt_matched > 0 else "⚠️"
-                purple_text = f"{icon} *{pt_matched}/{pt_eval}* rules matched replay"
-            elif pt_val:
-                purple_text = "✅ Replay validated"
-            else:
-                purple_text = "⚪ No rules replayed"
+                status_bits.append(f"*Replay:* {icon} {pt_matched}/{pt_eval}")
 
             bas_ver = fm.get("bas_verified", False)
             bas_prov = str(fm.get("bas_provider") or "").strip()
             bas_status = str(fm.get("bas_status") or "").strip().lower()
-            if bas_status == "skipped" or (not bas_ver and bas_status in {"", "skipped"}):
-                bas_text = "⚪ Optional — skipped (lab probe + KEEP decide publish)"
-            elif bas_prov.lower() == "mock" or bas_status.startswith("simulation"):
-                bas_text = "🧪 Synthetic only — *not* live BAS credit"
-            elif bas_ver and bas_prov:
-                bas_text = f"✅ *{bas_prov.upper()}* live detonation verified"
-            elif bas_prov:
-                bas_text = (
-                    f"⚠️ *{bas_prov.upper()}* live run not verified (`{bas_status or 'unknown'}`)"
-                )
-            elif bas_ver:
-                bas_text = "✅ Live detonation verified"
-            else:
-                bas_text = "⚪ Optional — no BAS run"
+            if bas_ver and bas_prov and bas_prov.lower() != "mock":
+                status_bits.append(f"*BAS:* ✅ {bas_prov.upper()}")
+            elif bas_prov and bas_prov.lower() != "mock" and bas_status not in {"", "skipped"}:
+                status_bits.append(f"*BAS:* ⚠️ {bas_prov.upper()} `{bas_status}`")
         except Exception:
             pass
 
@@ -259,40 +233,15 @@ def build_draft_card(result: RunResult, *, interactive: bool = False) -> list[di
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": (
-                    f"*Hunt ID:* `{result.hunt_id}`\n"
-                    f"*Context:* {research_ctx}\n"
-                    f"*Location:* `{result.draft_path}`"
-                ),
+                "text": "\n".join(status_bits),
             },
-        },
-        {
-            "type": "section",
-            "fields": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Status:*\n{status_label}",
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Intake Triage:*\n{parked_text}",
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Purple Team:*\n{purple_text}",
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*BAS Verification:*\n{bas_text}",
-                },
-            ],
         },
     ]
     if is_enrichment and result.detail:
         blocks.append(
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*Enrichment Update:*\n{result.detail}"},
+                "text": {"type": "mrkdwn", "text": f"*Update:* {result.detail}"},
             }
         )
     review_text = _draft_review_signals(result)
@@ -318,23 +267,7 @@ def build_draft_card(result: RunResult, *, interactive: bool = False) -> list[di
                     },
                     {
                         "type": "button",
-                        "text": {"type": "plain_text", "text": "🔍 Deploy Queries", "emoji": True},
-                        "action_id": "hecate_deploy_queries",
-                        "value": result.hunt_id,
-                    },
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "🧪 Purple Team Replay",
-                            "emoji": True,
-                        },
-                        "action_id": "hecate_rerun_purple",
-                        "value": result.hunt_id,
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "⏸️ Park / Suppress", "emoji": True},
+                        "text": {"type": "plain_text", "text": "⏸️ Park", "emoji": True},
                         "style": "danger",
                         "action_id": "hecate_park_hunt",
                         "value": result.hunt_id,
@@ -349,7 +282,7 @@ def build_draft_card(result: RunResult, *, interactive: bool = False) -> list[di
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": "🤖 *Hecate Autonomous Runner* | Run `hecate-runner watch` to observe execution",
+                    "text": "Deploy / purple replay: `/hecate` · `/hecate pending`",
                 }
             ],
         }
@@ -520,11 +453,14 @@ def build_purple_team_card(
     summary: str,
     log_source: str = "Synthetic event samples",
     emulation_mode: str = "Synthetic replay (no execution)",
+    replay_status: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build a synthetic replay card without claiming live validation."""
     color = COLOR_SUCCESS if success else COLOR_WARNING
     status_icon = "✅" if success else "⚠️"
-    status_title = "Synthetic Rule Match" if success else "No Synthetic Rule Match"
+    status_title = replay_status or (
+        "Synthetic Rule Match" if success else "No Synthetic Rule Match"
+    )
 
     blocks: list[dict[str, Any]] = [
         {
@@ -1516,35 +1452,25 @@ def build_siem_drift_alert_card(
     settings: Settings,
     interactive: bool = True,
 ) -> list[dict[str, Any]]:
-    """Build an interactive alert card notifying analysts of query drift or missing rules."""
+    """Build a compact alert card for SIEM/EDR query drift or missing rules."""
     active_drifted = [q for q in drifted_queries if q.get("status") != "decommissioned"]
     if not active_drifted:
         return []
 
     query_lines = []
-    for q in active_drifted[:5]:
+    for q in active_drifted[:3]:
         tgt = q.get("target", "unknown")
         fname = q.get("file", "")
         st = q.get("status", "drift_detected")
-        rem_id = q.get("remote_id") or ""
-        diff = q.get("drift_diff")
         icon = "⚠️" if st == "drift_detected" else "❌"
-        line = f"{icon} *{tgt}* (`{fname}`): `{st}`"
-        if rem_id:
-            line += f"\n  • Remote ID: `{rem_id}`"
-        if diff:
-            diff_preview = diff.strip().split("\n")[:2]
-            line += "\n  • " + " | ".join(diff_preview)
-        query_lines.append(line)
+        query_lines.append(f"{icon} `{tgt}` / `{fname}` — `{st}`")
 
-    if len(active_drifted) > 5:
-        query_lines.append(f"_...and {len(active_drifted) - 5} more query(s)_")
+    more = len(active_drifted) - 3
+    if more > 0:
+        query_lines.append(f"_…and {more} more_")
 
-    body_text = (
-        f"🚨 *SIEM Detection Drift Detected for `{hunt_id}`*\n\n"
-        "One or more detection queries deployed to your enterprise SIEM/EDR have "
-        "drifted from git-authoritative definitions or have been deleted remotely.\n\n"
-        + "\n".join(query_lines)
+    body_text = f"*`{hunt_id}`* — {len(active_drifted)} drifted/missing query(ies)\n" + "\n".join(
+        query_lines
     )
 
     blocks: list[dict[str, Any]] = [
@@ -1552,7 +1478,7 @@ def build_siem_drift_alert_card(
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"⚠️ SIEM Query Drift: {hunt_id}",
+                "text": f"⚠️ SIEM drift: {hunt_id}",
                 "emoji": True,
             },
         },
@@ -1574,34 +1500,16 @@ def build_siem_drift_alert_card(
                         "type": "button",
                         "text": {
                             "type": "plain_text",
-                            "text": "⚡ Reconcile in SIEM",
+                            "text": "⚡ Reconcile",
                             "emoji": True,
                         },
                         "style": "primary",
                         "action_id": "hecate_reconcile_drift",
                         "value": hunt_id,
                     },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Deploy All Queries", "emoji": True},
-                        "action_id": "hecate_deploy_queries",
-                        "value": hunt_id,
-                    },
                 ],
             }
         )
-
-    blocks.append(
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": "🛡️ *Hecate Detection-as-Code Guardian* | Automated Drift Sentinel",
-                }
-            ],
-        }
-    )
 
     return [{"color": COLOR_WARNING, "blocks": sanitize_slack_blocks(blocks)}]
 
@@ -1787,26 +1695,20 @@ def build_staged_sweep_card(
     sweep: Any,
     title: str = "",
 ) -> list[dict[str, Any]]:
-    """Build an interactive Slack Block Kit card for a scheduled hunt sweep awaiting approval."""
+    """Build a compact interactive card for one staged sweep (fallback / single-hunt)."""
     hunt_id = getattr(sweep, "hunt_id", "")
     sweep_id = getattr(sweep, "sweep_id", "")
     target = getattr(sweep, "target_siem", "SIEM")
     days = getattr(sweep, "time_range_days", 1)
     q_file = getattr(sweep, "query_file", "")
-    query_text = getattr(sweep, "query_text", "")
-    justification = getattr(sweep, "justification", "")
-
-    header_text = f"🎯 *Scheduled Hunt Sweep: `{hunt_id}`*"
     sub_title = f"_{title}_\n" if title else ""
-
-    q_snippet = query_text[:350] + ("..." if len(query_text) > 350 else "")
 
     blocks: list[dict[str, Any]] = [
         {
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"🎯 Scheduled Sweep Approval: {hunt_id}",
+                "text": f"🎯 Sweep ready: {hunt_id}",
                 "emoji": True,
             },
         },
@@ -1815,19 +1717,10 @@ def build_staged_sweep_card(
             "text": {
                 "type": "mrkdwn",
                 "text": (
-                    f"{header_text}\n{sub_title}"
-                    f"• *Target SIEM:* `{target}`\n"
-                    f"• *Lookback Window:* `{days} day(s)`\n"
-                    f"• *Query File:* `{q_file}`\n"
-                    f"• *Justification:* {justification}"
+                    f"{sub_title}"
+                    f"• *Target:* `{target}` · *Lookback:* `{days}d`\n"
+                    f"• *Query:* `{q_file}`"
                 ),
-            },
-        },
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*Query Snippet:*\n```{q_snippet}```",
             },
         },
         {
@@ -1835,14 +1728,14 @@ def build_staged_sweep_card(
             "elements": [
                 {
                     "type": "button",
-                    "text": {"type": "plain_text", "text": "▶️ Approve & Sweep", "emoji": True},
+                    "text": {"type": "plain_text", "text": "▶️ Approve", "emoji": True},
                     "style": "primary",
                     "value": sweep_id,
                     "action_id": "hecate_approve_sweep",
                 },
                 {
                     "type": "button",
-                    "text": {"type": "plain_text", "text": "⏹️ Skip Sweep", "emoji": True},
+                    "text": {"type": "plain_text", "text": "⏹️ Skip", "emoji": True},
                     "style": "danger",
                     "value": sweep_id,
                     "action_id": "hecate_reject_sweep",
@@ -1854,12 +1747,126 @@ def build_staged_sweep_card(
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": f"🛡️ *Hecate Safe Execution Gate* | Sweep ID: `{sweep_id}` | COUNT-FIRST Protected",
+                    "text": f"Sweep `{sweep_id}` · `/hecate pending`",
                 }
             ],
         },
     ]
     return [{"color": COLOR_WARNING, "blocks": sanitize_slack_blocks(blocks)}]
+
+
+def build_staged_sweeps_digest_card(
+    sweeps: list[Any],
+    titles: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """One digest for a batch of staged sweeps awaiting approval."""
+    titles = titles or {}
+    lines: list[str] = []
+    for sweep in sweeps[:12]:
+        hunt_id = getattr(sweep, "hunt_id", "")
+        target = getattr(sweep, "target_siem", "SIEM")
+        days = getattr(sweep, "time_range_days", 1)
+        title = titles.get(hunt_id, "")
+        label = f" — _{title[:60]}_" if title else ""
+        lines.append(f"• `{hunt_id}`{label} · `{target}` · `{days}d`")
+    more = len(sweeps) - 12
+    if more > 0:
+        lines.append(f"_…and {more} more_")
+
+    first_id = getattr(sweeps[0], "sweep_id", "") if sweeps else ""
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"🎯 {len(sweeps)} sweep(s) awaiting approval",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "\n".join(lines) or "_None_"},
+        },
+    ]
+    if first_id and len(sweeps) == 1:
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "▶️ Approve", "emoji": True},
+                        "style": "primary",
+                        "value": first_id,
+                        "action_id": "hecate_approve_sweep",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "⏹️ Skip", "emoji": True},
+                        "style": "danger",
+                        "value": first_id,
+                        "action_id": "hecate_reject_sweep",
+                    },
+                ],
+            }
+        )
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "Approve individually via `/hecate pending` or CLI `sweep approve`.",
+                }
+            ],
+        }
+    )
+    return [{"color": COLOR_WARNING, "blocks": sanitize_slack_blocks(blocks)}]
+
+
+def build_combined_daily_digest_card(
+    *,
+    detection: dict[str, Any],
+    hunting: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Single daily pulse covering detection engineering + threat hunting."""
+    rules = detection.get("total_sigma_rules", detection.get("rules_authored", 0))
+    pass_rate = detection.get("pass_rate_pct", "n/a")
+    if isinstance(pass_rate, (int, float)):
+        pass_rate = f"{pass_rate}%"
+    recent = hunting.get("recent_hunts_count", hunting.get("hunts_completed", 0))
+    total = hunting.get("total_hunts", 0)
+    top = hunting.get("top_techniques") or []
+    tech = ", ".join(f"`{t}`" for t in top[:5]) if top else "_none_"
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "📊 Hecate Daily Digest",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "section",
+            "fields": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Detection:*\n`{rules}` rules · pass `{pass_rate}`",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Hunting (24h):*\n`{recent}` runs · library `{total}`",
+                },
+            ],
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Top techniques:* {tech}"},
+        },
+    ]
+    return [{"color": COLOR_INFO, "blocks": sanitize_slack_blocks(blocks)}]
 
 
 def build_sweep_result_card(
@@ -1917,28 +1924,35 @@ def build_sweep_result_card(
     ]
 
     triage = getattr(result, "triage_report", None)
-    if triage:
-        t_verdict = getattr(triage, "verdict", "")
+    t_verdict = getattr(triage, "verdict", "") if triage else ""
+    detail_verdicts = {"true_positive", "suspicious"}
+
+    # Overmatch/error stay short — no triage dump.
+    if outcome in {"overmatch", "error"}:
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": "Short alert — inspect via `/hecate` or CLI."}
+                ],
+            }
+        )
+        return [{"color": color, "blocks": sanitize_slack_blocks(blocks)}]
+
+    if triage and t_verdict in detail_verdicts:
         t_conf = getattr(triage, "confidence", 0.0)
         t_summary = getattr(triage, "summary", "")
-        t_rationale = getattr(triage, "rationale", "")
         t_action = getattr(triage, "recommended_action", "pivot")
         entities = getattr(triage, "extracted_entities", {}) or {}
-
-        v_icon = (
-            "🟢" if t_verdict == "true_positive" else ("⚠️" if t_verdict == "suspicious" else "⚪")
-        )
+        v_icon = "🟢" if t_verdict == "true_positive" else "⚠️"
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        f"*🔎 Automated Triage Assessment:*\n"
-                        f"• *Verdict:* {v_icon} `{t_verdict}` (Uncalibrated score: `{t_conf:.2f}/1`)\n"
-                        f"• *Recommendation:* `{t_action}`\n"
-                        f"• *Summary:* {t_summary}\n"
-                        f"• *Rationale:* _{t_rationale[:200]}_"
+                        f"*Triage:* {v_icon} `{t_verdict}` (`{t_conf:.2f}`) → `{t_action}`\n"
+                        f"{t_summary}"
                     ),
                 },
             }
@@ -1949,89 +1963,59 @@ def build_sweep_result_card(
             ent_lines.append(f"• *Hosts:* {', '.join(f'`{h}`' for h in entities['hosts'][:3])}")
         if entities.get("users"):
             ent_lines.append(f"• *Users:* {', '.join(f'`{u}`' for u in entities['users'][:3])}")
-        if entities.get("processes"):
-            ent_lines.append(
-                f"• *Processes:* {', '.join(f'`{p}`' for p in entities['processes'][:3])}"
-            )
-        if entities.get("parent_processes"):
-            ent_lines.append(
-                f"• *Parents:* {', '.join(f'`{p}`' for p in entities['parent_processes'][:3])}"
-            )
         if entities.get("ips"):
             ent_lines.append(f"• *IPs:* {', '.join(f'`{ip}`' for ip in entities['ips'][:3])}")
-
         if ent_lines:
             blocks.append(
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": "*Extracted Security Entities:*\n" + "\n".join(ent_lines),
+                        "text": "*Entities:*\n" + "\n".join(ent_lines),
                     },
                 }
             )
 
-    events = getattr(result, "events", [])
-    if events and isinstance(events, list) and not triage:
-        sample_lines = []
-        for i, ev in enumerate(events[:3], 1):
-            if isinstance(ev, dict):
-                sample_lines.append(f"{i}. `{json.dumps(ev)[:160]}`")
-        if sample_lines:
+        pivots = getattr(result, "pivot_results", []) or []
+        if pivots:
+            pivot_lines = []
+            for p in pivots[:3]:
+                p_type = (
+                    getattr(p, "pivot_type", "")
+                    if hasattr(p, "pivot_type")
+                    else p.get("pivot_type", "")
+                )
+                p_hits = (
+                    getattr(p, "matched_count", 0)
+                    if hasattr(p, "matched_count")
+                    else p.get("matched_count", 0)
+                )
+                p_out = getattr(p, "outcome", "") if hasattr(p, "outcome") else p.get("outcome", "")
+                pivot_lines.append(f"• `{p_type}` → `{p_hits}` ({p_out})")
             blocks.append(
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": "*Sample Telemetry Hits:*\n" + "\n".join(sample_lines),
+                        "text": f"*Pivots ({len(pivots)}):*\n" + "\n".join(pivot_lines),
                     },
                 }
             )
-
-    # Automated Investigation Pivots
-    pivots = getattr(result, "pivot_results", []) or []
-    if pivots:
-        pivot_lines = []
-        for p in pivots[:3]:
-            p_type = (
-                getattr(p, "pivot_type", "")
-                if hasattr(p, "pivot_type")
-                else p.get("pivot_type", "")
-            )
-            p_tech = (
-                getattr(p, "technique", "") if hasattr(p, "technique") else p.get("technique", "")
-            )
-            p_hits = (
-                getattr(p, "matched_count", 0)
-                if hasattr(p, "matched_count")
-                else p.get("matched_count", 0)
-            )
-            p_out = getattr(p, "outcome", "") if hasattr(p, "outcome") else p.get("outcome", "")
-            icon = "⚠️" if p_out == "hits_detected" else ("🟢" if p_out == "clean" else "🚨")
-            pivot_lines.append(
-                f"• {icon} *{p_type.replace('_', ' ').title()}* (`{p_tech}`): `{p_hits}` events ({p_out})"
-            )
+    elif triage and t_verdict:
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*🔄 Automated Investigation Pivots ({len(pivots)} executed):*\n"
-                    + "\n".join(pivot_lines),
+                    "text": f"*Triage:* `{t_verdict}`",
                 },
             }
         )
 
-    # Interactive HITL Action Buttons (Self-Tuning)
     if triage:
-        t_verdict = getattr(triage, "verdict", "")
         finding_id = getattr(triage, "finding_id", "")
         if finding_id and t_verdict in ("benign_noise", "suspicious"):
-            btn_text = (
-                "🛠️ Auto-Tune (Exclude FP)"
-                if t_verdict == "benign_noise"
-                else "🛠️ Tune Rule (Narrow Filter)"
-            )
+            btn_text = "🛠️ Auto-Tune (Exclude FP)" if t_verdict == "benign_noise" else "🛠️ Tune Rule"
             blocks.append(
                 {
                     "type": "actions",
@@ -2051,15 +2035,4 @@ def build_sweep_result_card(
                 }
             )
 
-    blocks.append(
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": "🛡️ *Hecate Autonomous Engine* | Guardrails Enforced",
-                }
-            ],
-        }
-    )
     return [{"color": color, "blocks": sanitize_slack_blocks(blocks)}]
