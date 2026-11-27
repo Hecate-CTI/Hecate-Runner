@@ -1896,8 +1896,11 @@ def test_an_item_research_finds_no_behavior_in_is_parked_not_drafted(
     parked = list_parked(workspace / "cti_queue")
     assert len(parked) == 1
     assert "R-0005" in parked[0].reason
-    # The draft slot is refunded; the cursor moved past the item.
-    assert OrchestratorState.load(settings.state_file).drafts_today == 0
+    # The draft and research slots are refunded; the cursor moved past the item.
+    loaded_state = OrchestratorState.load(settings.state_file)
+    assert loaded_state.drafts_today == 0
+    assert loaded_state.research_runs_today == 0
+    assert loaded_state.research_attempts_today == 1
     assert not (workspace / "cti_queue" / "next.txt").exists()
 
 

@@ -509,7 +509,10 @@ class Orchestrator(
             not sweep_inventory
             and self.settings.research_enabled
             and intel_has_narrative
-            and not state.check_and_reserve_research(self.settings.max_research_runs_per_day)
+            and not state.check_and_reserve_research(
+                self.settings.max_research_runs_per_day,
+                max_attempts=self.settings.max_research_attempts_per_day,
+            )
         ):
             log.warning(
                 "Daily research quota reached (%d). Leaving CTI in queue for next cycle.",
@@ -926,7 +929,7 @@ class Orchestrator(
             except OSError as exc:
                 log.warning("Could not park CTI item (%s); drafting it instead.", exc)
             else:
-                self.trail.step("research", "park: %s; draft slot refunded", reason)
+                self.trail.step("research", "park: %s; draft and research slots refunded", reason)
                 log.info(
                     "Parking CTI item from %s (%s): %s",
                     item.source,
@@ -934,6 +937,7 @@ class Orchestrator(
                     reason,
                 )
                 state.refund_draft()
+                state.refund_research()
                 self._advance_past(item)
                 return (
                     None,

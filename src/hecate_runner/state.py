@@ -48,6 +48,7 @@ class OrchestratorState:
     date: str = ""
     drafts_today: int = 0
     research_runs_today: int = 0
+    research_attempts_today: int = 0
     total_drafts_ever: int = 0
     last_run_iso: str = ""
     last_draft_iso: str = ""
@@ -115,19 +116,27 @@ class OrchestratorState:
         self.drafts_today = max(0, self.drafts_today - 1)
         self.total_drafts_ever = max(0, self.total_drafts_ever - 1)
 
-    def check_and_reserve_research(self, max_per_day: int) -> bool:
+    def check_and_reserve_research(self, max_per_day: int, max_attempts: int | None = None) -> bool:
         """Return True if a web-searching research run is under quota (and consume one).
 
         Kept separate from the draft quota on purpose: a draft reservation is
         refunded when a cycle fails after research, but the search credits that
         research spent are not, so the retry would otherwise search again
-        without limit.
+        without limit. Parked non-threat items refund their research slot via
+        refund_research(), up to max_attempts per day.
         """
         self._roll_day()
         if self.research_runs_today >= max_per_day:
             return False
+        if max_attempts is not None and self.research_attempts_today >= max_attempts:
+            return False
         self.research_runs_today += 1
+        self.research_attempts_today += 1
         return True
+
+    def refund_research(self) -> None:
+        """Refund a reserved research run slot when research confirms the item is non-huntable and parked."""
+        self.research_runs_today = max(0, self.research_runs_today - 1)
 
     def _roll_day(self) -> None:
         today = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -135,6 +144,7 @@ class OrchestratorState:
             self.date = today
             self.drafts_today = 0
             self.research_runs_today = 0
+            self.research_attempts_today = 0
 
     def mark_run(self, *, success: bool) -> None:
         self.last_run_iso = datetime.now(UTC).isoformat()
