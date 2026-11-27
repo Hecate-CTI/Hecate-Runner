@@ -125,3 +125,19 @@ def test_github_step_summary_creates_missing_parent(tmp_path: Path, monkeypatch)
     assert result.exit_code == 0
     assert summary.exists()
     assert "Deployment" in summary.read_text()
+
+
+def test_decommission_queries_dry_run_does_not_retire_hunt(tmp_path: Path, monkeypatch) -> None:
+    hunts_dir = tmp_path / "hunts"
+    hunts_dir.mkdir(parents=True)
+    hunt_file = hunts_dir / "H-0001.md"
+    hunt_file.write_text("---\nhunt_id: H-0001\nstatus: active\n---\n# H-0001\n")
+    (tmp_path / "queries" / "H-0001").mkdir(parents=True)
+    (tmp_path / "queries" / "H-0001" / "test.spl").write_text("index=* | head 5\n")
+    monkeypatch.setenv("HECATE_WORKSPACE", str(tmp_path))
+
+    result = runner.invoke(app, ["decommission-queries", "H-0001", "--dry-run"])
+    assert result.exit_code == 0
+    assert "(dry-run) Hunt lifecycle status would transition to 'retired'" in result.output
+    # Verify file was NOT modified in dry-run mode
+    assert "status: active" in hunt_file.read_text()
