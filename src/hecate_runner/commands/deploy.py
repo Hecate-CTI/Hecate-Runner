@@ -293,8 +293,10 @@ def decommission_queries_cmd(
         f"decommissioned across {summary.get('total_hunts', 1)} hunt(s) in {mode_str} mode "
         f"(sign-off: [cyan]{actor}[/cyan] — '{reason}')."
     )
-    if retire_hunt:
+    if not dry_run and retire_hunt:
         console.print("[bold green]✔ Hunt lifecycle status transitioned to 'retired'.[/bold green]")
+    elif dry_run and retire_hunt:
+        console.print("[dim](dry-run) Hunt lifecycle status would transition to 'retired'.[/dim]")
 
     if verbose:
         for res in summary.get("results", []):

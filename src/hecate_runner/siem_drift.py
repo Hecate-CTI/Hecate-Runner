@@ -517,7 +517,7 @@ def decommission_hunt_queries(
     conn = init_drift_db(workspace)
     try:
         for h_id in hunts:
-            if retire_hunt:
+            if not dry_run and retire_hunt:
                 try:
                     set_hunt_lifecycle(
                         workspace=workspace,
