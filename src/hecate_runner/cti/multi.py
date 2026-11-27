@@ -58,7 +58,11 @@ class MultiCursorState:
         atomic_write_text(path, json.dumps({"next_index": self.next_index}))
 
 
-TIER_1_CRITICAL: frozenset[str] = frozenset({"cisa_kev", "vulncheck", "github_poc", "nuclei"})
+#: KEV / verified vuln intel only. ``github_poc`` is intentionally excluded:
+#: a public exploit repo is not evidence of exploitation in the wild and must
+#: not outrank primary CTI when priority tiers are enabled (falls through to
+#: the lowest tier).
+TIER_1_CRITICAL: frozenset[str] = frozenset({"cisa_kev", "vulncheck", "nuclei"})
 TIER_2_THREAT_FEEDS: frozenset[str] = frozenset(
     {
         "lolbas",
@@ -171,7 +175,7 @@ class MultiProvider(CTIProvider):
         now = time.time()
 
         if self.priority_tiers:
-            # Priority tiers ensure high-signal KEV & PoCs are evaluated before general feeds
+            # Priority tiers: KEV/vuln intel first, then threat feeds; PoC repos last
             tier1 = [p for p in self.providers if p.name in TIER_1_CRITICAL]
             tier2 = [p for p in self.providers if p.name in TIER_2_THREAT_FEEDS]
             tier3 = [

@@ -25,3 +25,18 @@ The finding is not ignored. Full scheduled/manual audits continue reporting it;
 PR checks block new matches. Service homes and private state directories restrict
 cache writers, but are not a fix for the underlying package. Revisit the migration
 when compatible backends are released.
+
+## Merging GitHub Actions Dependabot PRs
+
+Dependabot PRs that only bump Actions under `.github/workflows/` require the
+GitHub CLI `workflow` OAuth scope. A token with only `repo` can update most
+branches but cannot merge workflow-file changes:
+
+```bash
+# Clear any env override first, then refresh scopes
+env -u GITHUB_TOKEN -u GH_TOKEN gh auth refresh -h github.com -s repo,workflow,read:org
+```
+
+Approve the device login in the browser, then `gh pr merge --squash` as usual.
+Alternatively merge those PRs in the GitHub web UI, which does not need the
+CLI `workflow` scope.
