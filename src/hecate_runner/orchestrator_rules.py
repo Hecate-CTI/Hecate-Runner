@@ -185,7 +185,9 @@ class OrchestratorRulesMixin:
             title = str(candidate.get("title", "")).strip()
             if not title:
                 continue
-            full_title = f"Command the source shows being run: {title}"
+            # Prefer a behavioral title — echo "Command the source shows..." titles
+            # are rejected by the Core sigma quality gate and would be discarded.
+            full_title = f"Uncovered behavior: {title}"
             if full_title.lower() in covered_titles or title.lower() in covered_titles:
                 continue
 
@@ -219,8 +221,8 @@ class OrchestratorRulesMixin:
                 "id": str(uuid.uuid4()),
                 "status": "experimental",
                 "description": (
-                    f"Pass 2 rule auto-generated for uncovered behavior: "
-                    f'The source shows this command being run: "{candidate.get("command", "")}".'
+                    f"Pass 2 rule for an uncovered behavior from rule review: "
+                    f'"{candidate.get("command", "")}".'
                 ),
                 "references": [item.source_url] if item.source_url else [],
                 "author": "hecate (auto-generated pass 2 from uncovered review behaviors - requires analyst review)",

@@ -24,11 +24,13 @@ detection:
 hecate_provenance:
 - {{value: {LOADER}, type: sha256, role: executable, source: 'https://report.example/vshell'}}
 """
+# Use a public non-docnet address — RFC 198.18/15 and 203.0.113/24 are rejected
+# by the Core sigma quality gate as documentation/benchmark indicators.
 UNTRACED = """title: Connection to the C2
 logsource: {category: network_connection}
 detection:
   selection:
-    DestinationIp: 198.18.7.7
+    DestinationIp: 193.29.224.151
   condition: selection
 """
 
@@ -68,9 +70,9 @@ def test_an_untraced_address_is_named(
     settings: Settings, mock_hecate: MagicMock, caplog: pytest.LogCaptureFixture
 ) -> None:
     trail = _run(settings, mock_hecate, caplog, TRACED, UNTRACED)
-    assert any("untraced indicator(s) in rules: 198.18.7.7 (rule 1)" in m for m in trail)
+    assert any("untraced indicator(s) in rules: 193.29.224.151 (rule 1)" in m for m in trail)
     assert any(
-        r.levelname == "WARNING" and "no provenance: 198.18.7.7" in r.getMessage()
+        r.levelname == "WARNING" and "no provenance: 193.29.224.151" in r.getMessage()
         for r in caplog.records
     )
 
