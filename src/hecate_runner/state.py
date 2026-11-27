@@ -116,9 +116,7 @@ class OrchestratorState:
         self.drafts_today = max(0, self.drafts_today - 1)
         self.total_drafts_ever = max(0, self.total_drafts_ever - 1)
 
-    def check_and_reserve_research(
-        self, max_per_day: int, max_attempts: int | None = None
-    ) -> bool:
+    def check_and_reserve_research(self, max_per_day: int, max_attempts: int | None = None) -> bool:
         """Return True if a web-searching research run is under quota (and consume one).
 
         Kept separate from the draft quota on purpose: a draft reservation is
