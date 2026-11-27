@@ -143,15 +143,31 @@ class Settings(BaseSettings):
         alias="HECATE_RUNNER_MAX_DRAFTS_PER_DAY",
     )
     max_research_runs_per_day: int = Field(
-        default=3,
+        default=10,
         ge=0,
         le=100,
-        alias="HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY",
+        validation_alias=AliasChoices(
+            "HECATE_RUNNER_MAX_RESEARCH_RUNS_PER_DAY",
+            "HECATE_MAX_RESEARCH_RUNS_PER_DAY",
+        ),
         description=(
             "Cap on web-searching research runs per UTC day. Each run makes two "
-            "Tavily searches (4 credits at advanced depth, 2 at basic). Unlike "
-            "the draft quota this is never refunded, so a cycle that fails after "
-            "research and retries cannot keep spending credits. 0 blocks all searched research."
+            "Tavily searches (4 credits at advanced depth, 2 at basic). Parked "
+            "non-threat items refund their research slot up to the daily attempt ceiling. "
+            "0 blocks all searched research."
+        ),
+    )
+    max_research_attempts_per_day: int = Field(
+        default=25,
+        ge=0,
+        le=500,
+        validation_alias=AliasChoices(
+            "HECATE_RUNNER_MAX_RESEARCH_ATTEMPTS_PER_DAY",
+            "HECATE_MAX_RESEARCH_ATTEMPTS_PER_DAY",
+        ),
+        description=(
+            "Absolute safety ceiling on total research attempts per UTC day, "
+            "including refunded runs on parked non-threats, to prevent unbounded API consumption."
         ),
     )
     min_hours_between_drafts: float = Field(

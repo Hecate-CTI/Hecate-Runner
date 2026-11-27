@@ -164,6 +164,7 @@ def test_execute_research_phase_handles_errors_and_parks(
     # Park when research describes no behavior and cti_triage == "park"
     orchestrator.settings.cti_triage = "park"
     state.drafts_today = 1
+    state.research_runs_today = 1
     mock_res = ResearchResult(
         research_id="R-001",
         raw_output="This article describes no observable adversary behavior at all.",
@@ -186,6 +187,7 @@ def test_execute_research_phase_handles_errors_and_parks(
         assert res.outcome == "parked_after_research"
         assert res.parked_count == 1
         assert state.drafts_today == 0
+        assert state.research_runs_today == 0
         mock_park.assert_called_once()
 
 
