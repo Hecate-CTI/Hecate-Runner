@@ -357,6 +357,7 @@ def test_cooldowns_persist_across_recreated_providers(tmp_path: Path) -> None:
     # misp is still cooling down from p1's cycle, so rss-2 is picked!
     assert item2 is not None and item2.content == "rss-2"
 
+
 def test_github_poc_is_not_tier1_critical() -> None:
     from hecate_runner.cti.multi import TIER_1_CRITICAL, TIER_2_THREAT_FEEDS
 
@@ -365,4 +366,3 @@ def test_github_poc_is_not_tier1_critical() -> None:
     assert "nuclei" in TIER_1_CRITICAL
     # Falls through to lowest tier when priority_tiers=True
     assert "github_poc" not in TIER_2_THREAT_FEEDS
-

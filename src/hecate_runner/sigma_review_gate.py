@@ -45,7 +45,9 @@ def discard_rejected_rules(
     for rule in rules:
         path = local(rule.get("path"))
         doc = parse(str(rule.get("rule_yaml") or ""))
-        reason = review_block_reason(doc, filename=str(path.name if path else rule.get("title") or ""))
+        reason = review_block_reason(
+            doc, filename=str(path.name if path else rule.get("title") or "")
+        )
         if reason:
             title = str(rule.get("title") or doc.get("title") or "Untitled rule")
             rejected.append({"title": title, "reason": reason})
