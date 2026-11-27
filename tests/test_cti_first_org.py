@@ -168,3 +168,40 @@ def test_first_org_kev_enrichment(tmp_path: Path) -> None:
     assert "Palo Alto Networks" in item.content
     assert "PAN-OS contains a command injection" in item.content
     assert "Known Ransomware Campaign Use: Known" in item.content
+
+
+def test_first_org_skips_legacy_cve_prior_to_min_year(tmp_path: Path) -> None:
+    cursor_file = tmp_path / "first_org_cursor.json"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "cve": "CVE-2005-2428",
+                        "epss": "0.95",
+                        "percentile": "0.99",
+                        "date": "2026-10-25",
+                    },
+                    {
+                        "cve": "CVE-2024-3400",
+                        "epss": "0.90",
+                        "percentile": "0.95",
+                        "date": "2026-10-25",
+                    },
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = FirstOrgProvider(
+        cursor_file=cursor_file,
+        min_cve_year=2021,
+        client=client,
+    )
+
+    # Should skip CVE-2005-2428 and return CVE-2024-3400
+    item = provider.next_item()
+    assert item is not None
+    assert "CVE-2024-3400" in item.title

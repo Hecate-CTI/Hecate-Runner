@@ -7,8 +7,10 @@ Triggers autonomous proactive hunt drafting before widespread exploitation occur
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -80,6 +82,7 @@ class FirstOrgProvider(CTIProvider):
         base_url: str = "https://api.first.org/data/v1/epss",
         min_epss: float = 0.50,
         min_percentile: float = 0.85,
+        min_cve_year: int = 2021,
         limit: int = 50,
         request_timeout_sec: float = 20.0,
         client: httpx.Client | None = None,
@@ -88,6 +91,7 @@ class FirstOrgProvider(CTIProvider):
         self.base_url = base_url.rstrip("/")
         self.min_epss = min_epss
         self.min_percentile = min_percentile
+        self.min_cve_year = min_cve_year
         self.limit = limit
         self.request_timeout_sec = request_timeout_sec
         self._external_client = client is not None
@@ -144,6 +148,22 @@ class FirstOrgProvider(CTIProvider):
             cve = str(entry.get("cve") or "").strip().upper()
             if not cve or cursor.already_seen(cve):
                 continue
+
+            if self.min_cve_year > 0:
+                m = re.match(r"CVE-(\d{4})-", cve, re.IGNORECASE)
+                if m:
+                    with contextlib.suppress(ValueError):
+                        year = int(m.group(1))
+                        if year < self.min_cve_year:
+                            log.info(
+                                "FIRST.org EPSS entry %s year %d precedes minimum %d; skipping",
+                                cve,
+                                year,
+                                self.min_cve_year,
+                            )
+                            cursor.advance(cve)
+                            cursor.save(self.cursor_file)
+                            continue
 
             try:
                 epss = float(entry.get("epss") or 0.0)

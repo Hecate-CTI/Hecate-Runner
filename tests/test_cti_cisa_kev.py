@@ -99,3 +99,38 @@ def test_acknowledge(provider):
     item = CTIItem(content="x", received_at=dt)
     provider.acknowledge(item)
     assert provider._read_cursor() == dt
+
+
+@patch("httpx.get")
+def test_cisa_kev_skips_legacy_cve_prior_to_min_year(mock_get, tmp_path):
+    legacy_provider = CisaKevProvider(workspace=tmp_path, min_cve_year=2021)
+    legacy_provider._write_cursor(datetime(2026, 9, 1, tzinfo=UTC))
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "vulnerabilities": [
+            {
+                "cveID": "CVE-2005-2428",
+                "dateAdded": "2026-09-02",
+                "vendorProject": "IBM",
+                "product": "Lotus Domino",
+                "vulnerabilityName": "Lotus Domino WebMail Info Disclosure",
+            },
+            {
+                "cveID": "CVE-2024-3400",
+                "dateAdded": "2026-09-03",
+                "vendorProject": "Palo Alto",
+                "product": "PAN-OS",
+                "vulnerabilityName": "Command Injection",
+            },
+        ]
+    }
+    mock_get.return_value = mock_response
+
+    item = legacy_provider.next_item()
+    # Should have skipped CVE-2005-2428 and yielded CVE-2024-3400
+    assert item is not None
+    assert item.identifier == "CVE-2024-3400"
+    # Cursor should have advanced past CVE-2005-2428
+    assert legacy_provider._read_cursor() >= datetime(2026, 9, 2, tzinfo=UTC)

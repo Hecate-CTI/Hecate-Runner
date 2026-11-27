@@ -27,6 +27,7 @@ survivable, but it does not make it good, so it is not the gate used here.
 
 from __future__ import annotations
 
+import contextlib
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -128,6 +129,58 @@ _EXECUTABLE_RE = re.compile(
 _FAMILY_STOPWORDS = frozenset(
     {"the", "this", "that", "how", "why", "our", "new", "top", "for", "and", "with", "from", "your"}
 )
+
+_LEGACY_PLATFORM_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:lotus\s+notes|lotus\s+domino|domino\s+r[5-9])\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:windows\s+(?:95|98|me|nt(?:\s+4\.0)?|2000|xp|server\s+2003))\b", re.IGNORECASE
+    ),
+    re.compile(r"\b(?:adobe\s+flash(?:\s+player)?|macromedia\s+flash)\b", re.IGNORECASE),
+    re.compile(r"\b(?:silverlight|macromedia\s+shockwave)\b", re.IGNORECASE),
+    re.compile(r"\b(?:internet\s+explorer\s+[5-8]|ie[5-8]\b)\b", re.IGNORECASE),
+)
+
+_MODERN_PLATFORM_INDICATORS = re.compile(
+    r"\b(?:kubernetes|k8s|docker|container|aws|gcp|azure|linux|ubuntu|debian|macos|darwin|windows\s+(?:10|11|server\s+201[69]|server\s+202[25]))\b",
+    re.IGNORECASE,
+)
+
+
+def extract_cves_from_item(item: CTIItem) -> set[str]:
+    """Extract all CVE identifiers from item metadata, title, and body."""
+    cves: set[str] = set()
+    indicators = item.metadata.get("indicators") or {}
+    if isinstance(indicators, dict):
+        for c in indicators.get("cve", []):
+            if isinstance(c, str) and c.strip():
+                cves.add(c.strip().upper())
+    for key in ("cve_id", "cve"):
+        val = item.metadata.get(key)
+        if isinstance(val, str) and val.strip():
+            cves.add(val.strip().upper())
+        elif isinstance(val, list):
+            for v in val:
+                if isinstance(v, str) and v.strip():
+                    cves.add(v.strip().upper())
+    for c in item.metadata.get("cves") or []:
+        if isinstance(c, str) and c.strip():
+            cves.add(c.strip().upper())
+
+    blob = f"{item.title or ''}\n{item.content or ''}"
+    for m in _CVE_RE.finditer(blob):
+        cves.add(m.group(0).upper())
+    return cves
+
+
+def extract_cve_years(cves: set[str]) -> set[int]:
+    """Extract 4-digit publication years from CVE strings."""
+    years: set[int] = set()
+    for c in cves:
+        m = re.match(r"CVE-(\d{4})-", c, re.IGNORECASE)
+        if m:
+            with contextlib.suppress(ValueError):
+                years.add(int(m.group(1)))
+    return years
 
 
 def _has_indicators(item: CTIItem) -> bool:
@@ -256,6 +309,7 @@ def triage(
     *,
     greynoise_api_key: str | None = None,
     anti_noise_enabled: bool = True,
+    min_cve_year: int = 2021,
 ) -> TriageVerdict:
     """Park commentary, a topic essay with nothing to detect, or benign scanner noise.
 
@@ -287,6 +341,27 @@ def triage(
 
     if reason := topic_without_intrusion(item):
         return TriageVerdict(True, reason)
+
+    # Legacy CVE year gating: park vulnerability items targeting solely ancient CVEs
+    if min_cve_year > 0:
+        cves = extract_cves_from_item(item)
+        if cves:
+            years = extract_cve_years(cves)
+            if years and all(y < min_cve_year for y in years):
+                return TriageVerdict(
+                    True,
+                    f"targets legacy CVEs ({', '.join(sorted(cves))}) prior to minimum supported year {min_cve_year}",
+                )
+
+    # Legacy decommissioned platform gating: park items exclusively targeting obsolete enterprise software
+    blob = f"{item.title or ''}\n{item.content or ''}"
+    for pattern in _LEGACY_PLATFORM_PATTERNS:
+        m = pattern.search(blob)
+        if m and not _MODERN_PLATFORM_INDICATORS.search(blob):
+            return TriageVerdict(
+                True,
+                f"targets decommissioned legacy enterprise software ({m.group(0)}) outside operational scope",
+            )
 
     # Fast-filter actionability pre-triage: park marketing, webinars, or whitepapers that carry no observables
     indicators = item.metadata.get("indicators") or {}

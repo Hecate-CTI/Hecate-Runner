@@ -146,6 +146,7 @@ class OrchestratorIntakeMixin:
                         item,
                         greynoise_api_key=self.settings.greynoise_api_key,
                         anti_noise_enabled=self.settings.anti_noise_triage,
+                        min_cve_year=self.settings.cti_min_cve_year,
                     )
                     if self.settings.cti_triage == "park"
                     else None

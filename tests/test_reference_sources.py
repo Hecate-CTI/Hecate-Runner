@@ -162,7 +162,13 @@ def template() -> dict[str, Any]:
 
 
 def nuclei(
-    tmp_path: Path, *, kev: bool = False, score: float = 0.01, fail: bool = False, date: str = ""
+    tmp_path: Path,
+    *,
+    kev: bool = False,
+    score: float = 0.01,
+    fail: bool = False,
+    date: str = "",
+    min_cve_year: int = 2021,
 ) -> NucleiProvider:
     def handler(request: httpx.Request) -> httpx.Response:
         if fail:
@@ -185,7 +191,11 @@ def nuclei(
             },
         )
 
-    return NucleiProvider(tmp_path, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    return NucleiProvider(
+        tmp_path,
+        min_cve_year=min_cve_year,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
 
 
 @pytest.mark.parametrize(
@@ -211,6 +221,14 @@ def test_nuclei_risk_outages_staleness_and_missing_cve(tmp_path: Path) -> None:
         nuclei(tmp_path, date="2020-01-01").build_item(data, yaml.safe_dump(data), "test.yaml", NEW)
     data["info"]["classification"] = {}
     assert nuclei(tmp_path, fail=True).build_item(data, "", "test.yaml", NEW) is None
+
+
+def test_nuclei_rejects_legacy_cve_prior_to_min_year(tmp_path: Path) -> None:
+    provider = nuclei(tmp_path, kev=True, min_cve_year=2021)
+    data = template()
+    data["info"]["classification"]["cve-id"] = "CVE-2005-2428"
+    item = provider.build_item(data, yaml.safe_dump(data), "http/cves/2005/CVE-2005-2428.yaml", NEW)
+    assert item is None
 
 
 def test_exact_request_candidates_replay_no_guessed_method_or_response_matcher() -> None:

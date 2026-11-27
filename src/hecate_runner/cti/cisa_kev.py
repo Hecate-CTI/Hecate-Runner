@@ -7,8 +7,10 @@ Vulnerability-shaped rather than behavior-shaped: generates intelligence focused
 on identifying exploitation of a specific CVE rather than a broader TTP.
 """
 
+import contextlib
 import json
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -26,8 +28,9 @@ class CisaKevProvider(CTIProvider):
 
     name: str = "cisa_kev"
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, min_cve_year: int = 2021):
         self.workspace = workspace
+        self.min_cve_year = min_cve_year
         self.cursor_file = self.workspace / ".cursors" / "cisa_kev_cursor.json"
 
         # In-memory cache of the fetched catalog so we don't spam CISA
@@ -149,8 +152,24 @@ class CisaKevProvider(CTIProvider):
                 continue
 
             if date_added > cursor:
-                # We found a new one!
                 cve = vuln.get("cveID", "Unknown CVE")
+                if self.min_cve_year > 0:
+                    m = re.match(r"CVE-(\d{4})-", str(cve), re.IGNORECASE)
+                    if m:
+                        with contextlib.suppress(ValueError):
+                            year = int(m.group(1))
+                            if year < self.min_cve_year:
+                                log.info(
+                                    "CISA KEV vulnerability %s year %d precedes minimum %d; advancing past",
+                                    cve,
+                                    year,
+                                    self.min_cve_year,
+                                )
+                                self._write_cursor(date_added)
+                                cursor = date_added
+                                continue
+
+                # We found a new one!
                 blurb = self._build_blurb(vuln)
 
                 return CTIItem(

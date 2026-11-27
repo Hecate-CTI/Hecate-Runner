@@ -1368,6 +1368,14 @@ class Settings(BaseSettings):
             "services (RIOT) or known benign scanners."
         ),
     )
+    cti_min_cve_year: int = Field(
+        default=2021,
+        validation_alias=AliasChoices("HECATE_CTI_MIN_CVE_YEAR", "HECATE_RUNNER_CTI_MIN_CVE_YEAR"),
+        description=(
+            "Minimum CVE publication year for vulnerability-centric CTI. "
+            "Items targeting solely older CVEs are filtered/parked as legacy."
+        ),
+    )
     vt_api_key: str | None = Field(
         default=None,
         alias="VT_API_KEY",

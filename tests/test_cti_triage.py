@@ -325,3 +325,88 @@ def test_the_same_essay_passes_when_it_names_a_procedure_or_an_intrusion() -> No
 
 def test_a_short_blurb_is_not_parked_for_lack_of_detail() -> None:
     assert triage(_item("Cat's Got Your Files: Lynx Ransomware")).park is False
+
+
+# --- Legacy CVE and decommissioned platform gating -------------------------
+
+
+def test_legacy_cve_prior_to_min_year_is_parked() -> None:
+    item = CTIItem(
+        content="Exploit procedure for CVE-2005-2428 affects Lotus Domino WebMail via GET /names.nsf.",
+        source="nuclei",
+        title="Nuclei template: CVE-2005-2428 - Lotus Domino R5 and R6 WebMail",
+        metadata={"cve_id": "CVE-2005-2428"},
+    )
+    verdict = triage(item, min_cve_year=2021)
+    assert verdict.park is True
+    assert "targets legacy CVEs" in verdict.reason
+    assert "2021" in verdict.reason
+
+
+def test_modern_cve_passes_year_gate() -> None:
+    item = CTIItem(
+        content="Exploit procedure for CVE-2024-3400 command injection in PAN-OS GlobalProtect.",
+        source="cisa_kev",
+        title="PAN-OS GlobalProtect RCE",
+        metadata={"cve_id": "CVE-2024-3400"},
+    )
+    verdict = triage(item, min_cve_year=2021)
+    assert verdict.park is False
+
+
+def test_mixed_cve_with_at_least_one_modern_passes_gate() -> None:
+    item = CTIItem(
+        content="Attack chain chains CVE-2019-1234 with CVE-2026-9082 against Drupal Core.",
+        source="rss",
+        title="Multi-stage Drupal compromise",
+        metadata={"indicators": {"cve": ["CVE-2019-1234", "CVE-2026-9082"]}},
+    )
+    verdict = triage(item, min_cve_year=2021)
+    assert verdict.park is False
+
+
+def test_behavioral_cti_without_cve_is_not_parked_by_year_gate() -> None:
+    item = CTIItem(
+        content="Adversaries employ ClickFix social engineering targeting macOS using Mach-O payloads.",
+        source="rss",
+        title="ClickFix Campaign Delivers AMOS Infostealer",
+        metadata={},
+    )
+    verdict = triage(item, min_cve_year=2021)
+    assert verdict.park is False
+
+
+def test_legacy_cve_gate_respects_custom_threshold() -> None:
+    item = CTIItem(
+        content="Exploit procedure for CVE-2005-2428 affects Lotus Domino WebMail.",
+        source="nuclei",
+        title="Nuclei template: CVE-2005-2428",
+        metadata={"cve_id": "CVE-2005-2428"},
+    )
+    # When min_cve_year is set before 2005, it passes the year gate
+    verdict = triage(item, min_cve_year=2000)
+    # May still park on legacy software if Domino is mentioned without modern context
+    assert "targets legacy CVEs" not in verdict.reason
+
+
+def test_legacy_decommissioned_software_is_parked() -> None:
+    item = CTIItem(
+        content="Vulnerability discovered in Lotus Domino R5 mail routing daemon allows information leakage.",
+        source="rss",
+        title="Vulnerability in Lotus Domino Server",
+        metadata={},
+    )
+    verdict = triage(item, min_cve_year=0)
+    assert verdict.park is True
+    assert "targets decommissioned legacy enterprise software" in verdict.reason
+
+
+def test_legacy_software_with_modern_cloud_context_passes_platform_gate() -> None:
+    item = CTIItem(
+        content="Adversaries targeting Linux container environments migrate payloads to attack legacy services.",
+        source="rss",
+        title="Container threat group leverages multiple exploits",
+        metadata={},
+    )
+    verdict = triage(item, min_cve_year=0)
+    assert verdict.park is False
