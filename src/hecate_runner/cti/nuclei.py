@@ -6,6 +6,7 @@ code, interactsh callback or HTTP request from a template is executed.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import time
 from datetime import UTC, date, datetime
@@ -21,13 +22,30 @@ class NucleiProvider(GitHubDeltaProvider):
     prefix = "http/cves/"
 
     def __init__(
-        self, *args: Any, min_epss: float = 0.5, min_percentile: float = 0.85, **kwargs: Any
+        self,
+        *args: Any,
+        min_epss: float = 0.5,
+        min_percentile: float = 0.85,
+        min_cve_year: int = 2021,
+        **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
         self.min_epss, self.min_percentile = min_epss, min_percentile
+        self.min_cve_year = min_cve_year
         self._kev: set[str] | None = None
 
     def eligible(self, cves: list[str]) -> tuple[bool, str]:
+        # Pre-filter by CVE year before network risk-gating
+        if self.min_cve_year > 0:
+            years: set[int] = set()
+            for c in cves:
+                m = re.match(r"CVE-(\d{4})-", c, re.IGNORECASE)
+                if m:
+                    with contextlib.suppress(ValueError):
+                        years.add(int(m.group(1)))
+            if years and all(y < self.min_cve_year for y in years):
+                return False, f"CVE year prior to minimum supported {self.min_cve_year}"
+
         # Embedded template EPSS/tags may be old; they cannot authorize intake.
         if self._kev is None:
             r = self.client.get(

@@ -83,6 +83,7 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             options.update(
                 min_epss=settings.first_org_min_epss,
                 min_percentile=settings.first_org_min_percentile,
+                min_cve_year=settings.cti_min_cve_year,
             )
         return references[name](**options)
     if name == "file":
@@ -132,7 +133,10 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             ),
         )
     if name == "cisa_kev":
-        return CisaKevProvider(workspace=settings.hecate_workspace)
+        return CisaKevProvider(
+            workspace=settings.hecate_workspace,
+            min_cve_year=settings.cti_min_cve_year,
+        )
     if name == "abuse_ch":
         return AbuseChProvider(
             cursor_file=settings.abuse_ch_cursor_file,
@@ -228,6 +232,7 @@ def get_provider(name: str, *, settings: Settings) -> CTIProvider:
             base_url=settings.first_org_base_url,
             min_epss=settings.first_org_min_epss,
             min_percentile=settings.first_org_min_percentile,
+            min_cve_year=settings.cti_min_cve_year,
             limit=settings.first_org_limit,
             request_timeout_sec=settings.first_org_request_timeout_sec,
         )
