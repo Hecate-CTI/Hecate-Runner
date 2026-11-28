@@ -132,5 +132,72 @@ def test_cisa_kev_skips_legacy_cve_prior_to_min_year(mock_get, tmp_path):
     # Should have skipped CVE-2005-2428 and yielded CVE-2024-3400
     assert item is not None
     assert item.identifier == "CVE-2024-3400"
-    # Cursor should have advanced past CVE-2005-2428
-    assert legacy_provider._read_cursor() >= datetime(2026, 9, 2, tzinfo=UTC)
+    # Do not advance the date cursor on year-skip while a modern item is returned;
+    # acknowledge() owns cursor movement for accepted items.
+    assert legacy_provider._read_cursor() == datetime(2026, 9, 1, tzinfo=UTC)
+
+
+@patch("httpx.get")
+def test_cisa_kev_same_date_legacy_then_modern_still_yields(mock_get, tmp_path):
+    """Same dateAdded: visiting a legacy CVE first must not skip a modern peer."""
+    provider = CisaKevProvider(workspace=tmp_path, min_cve_year=2021)
+    provider._write_cursor(datetime(2026, 9, 1, tzinfo=UTC))
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "vulnerabilities": [
+            {
+                "cveID": "CVE-2005-2428",
+                "dateAdded": "2026-09-02",
+                "vendorProject": "IBM",
+                "product": "Lotus Domino",
+                "vulnerabilityName": "Lotus Domino WebMail Info Disclosure",
+            },
+            {
+                "cveID": "CVE-2024-3400",
+                "dateAdded": "2026-09-02",
+                "vendorProject": "Palo Alto",
+                "product": "PAN-OS",
+                "vulnerabilityName": "Command Injection",
+            },
+        ]
+    }
+    mock_get.return_value = mock_response
+
+    item = provider.next_item()
+    assert item is not None
+    assert item.identifier == "CVE-2024-3400"
+    assert provider._read_cursor() == datetime(2026, 9, 1, tzinfo=UTC)
+
+
+@patch("httpx.get")
+def test_cisa_kev_legacy_only_advances_cursor(mock_get, tmp_path):
+    """When every post-cursor vuln is year-skipped, advance so polls do not stall."""
+    provider = CisaKevProvider(workspace=tmp_path, min_cve_year=2021)
+    provider._write_cursor(datetime(2026, 9, 1, tzinfo=UTC))
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "vulnerabilities": [
+            {
+                "cveID": "CVE-2005-2428",
+                "dateAdded": "2026-09-02",
+                "vendorProject": "IBM",
+                "product": "Lotus Domino",
+                "vulnerabilityName": "Lotus Domino WebMail Info Disclosure",
+            },
+            {
+                "cveID": "CVE-2010-1234",
+                "dateAdded": "2026-09-03",
+                "vendorProject": "Legacy",
+                "product": "Soft",
+                "vulnerabilityName": "Old Bug",
+            },
+        ]
+    }
+    mock_get.return_value = mock_response
+
+    assert provider.next_item() is None
+    assert provider._read_cursor() == datetime(2026, 9, 3, tzinfo=UTC)

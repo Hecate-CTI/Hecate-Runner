@@ -139,6 +139,9 @@ class CisaKevProvider(CTIProvider):
             return None
 
         cursor = self._read_cursor()
+        # Defer date-cursor advances on year-skips so same-date modern CVEs later
+        # in the catalog are not skipped when a legacy CVE is visited first.
+        skipped_legacy_max: datetime | None = None
 
         for vuln in vulns:
             date_str = vuln.get("dateAdded")
@@ -160,13 +163,13 @@ class CisaKevProvider(CTIProvider):
                             year = int(m.group(1))
                             if year < self.min_cve_year:
                                 log.info(
-                                    "CISA KEV vulnerability %s year %d precedes minimum %d; advancing past",
+                                    "CISA KEV vulnerability %s year %d precedes minimum %d; skipping",
                                     cve,
                                     year,
                                     self.min_cve_year,
                                 )
-                                self._write_cursor(date_added)
-                                cursor = date_added
+                                if skipped_legacy_max is None or date_added > skipped_legacy_max:
+                                    skipped_legacy_max = date_added
                                 continue
 
                 # We found a new one!
@@ -182,6 +185,9 @@ class CisaKevProvider(CTIProvider):
                     source_url=f"https://nvd.nist.gov/vuln/detail/{cve}",
                 )
 
+        # No eligible item: advance past legacy-only dates so polls do not stall.
+        if skipped_legacy_max is not None:
+            self._write_cursor(skipped_legacy_max)
         return None
 
     def acknowledge(self, item: CTIItem) -> None:
